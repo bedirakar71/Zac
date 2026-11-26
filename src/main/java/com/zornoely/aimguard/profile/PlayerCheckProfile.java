@@ -31,6 +31,8 @@ public final class PlayerCheckProfile {
     private long lastKnockbackTimeMs;
     private long lastFastTurnMs;
     private float lastFastTurnDeg;
+    private long lastKickTimeMs;
+    private long lastDecayTimeMs;
 
     private long lastFakeCritMs;
     private int consecutiveFakeCrits;
@@ -41,6 +43,9 @@ public final class PlayerCheckProfile {
 
     private boolean lagging;
     private boolean hasSimulatedVy;
+    private int lastPingMs = -1;
+    private long pingDeltaMs;
+    private long mitigationUntilMs;
 
     public PlayerCheckProfile(UUID playerId) {
         this.playerId = playerId;
@@ -92,6 +97,15 @@ public final class PlayerCheckProfile {
         this.combatCheatScore = Math.max(0.0, this.combatCheatScore - 0.08);
     }
 
+    public void decayVl(double mathDecay, double heuristicDecay, long nowMs) {
+        decayVl(mathDecay, heuristicDecay);
+        this.lastDecayTimeMs = nowMs;
+    }
+
+    public long getLastDecayTimeMs() {
+        return lastDecayTimeMs;
+    }
+
     public double getCombatCheatScore() {
         return combatCheatScore;
     }
@@ -127,6 +141,30 @@ public final class PlayerCheckProfile {
     public void recordFastTurn(float deg, long nowMs) {
         this.lastFastTurnDeg = deg;
         this.lastFastTurnMs = nowMs;
+    }
+
+    public long getLastKickTimeMs() {
+        return lastKickTimeMs;
+    }
+
+    public void setLastKickTimeMs(long lastKickTimeMs) {
+        this.lastKickTimeMs = lastKickTimeMs;
+    }
+
+    public void updatePing(int pingMs, long nowMs) {
+        if (this.lastPingMs >= 0) {
+            this.pingDeltaMs = Math.abs(pingMs - this.lastPingMs);
+        } else {
+            this.pingDeltaMs = 0L;
+        }
+        this.lastPingMs = pingMs;
+        if (this.lastDecayTimeMs == 0L) {
+            this.lastDecayTimeMs = nowMs;
+        }
+    }
+
+    public long getPingDeltaMs() {
+        return pingDeltaMs;
     }
 
     public int recordAndGetConsecutiveCrits(long nowMs) {
@@ -184,8 +222,18 @@ public final class PlayerCheckProfile {
         this.hasSimulatedVy = hasSimulatedVy;
     }
 
+    public void activateMitigation(long durationMs) {
+        // Bilerek bos: oyuncu hareketi/ekrani dondurulmaz
+        this.mitigationUntilMs = 0L;
+    }
+
+    public boolean isMitigating() {
+        return false;
+    }
+
     public void clearMitigation() {
         // Bilerek bos: oyuncu hareketi/ekrani dondurulmaz
+        this.mitigationUntilMs = 0L;
     }
 
     public void resetAll() {
@@ -199,11 +247,16 @@ public final class PlayerCheckProfile {
         lastKnockbackTimeMs = 0L;
         lastFastTurnMs = 0L;
         lastFastTurnDeg = 0.0f;
+        lastKickTimeMs = 0L;
+        lastDecayTimeMs = 0L;
         resetConsecutiveCrits();
         decoyLockTicks = 0;
         decoyLockScore = 0.0;
         decoyFlagged = false;
         lagging = false;
         hasSimulatedVy = false;
+        lastPingMs = -1;
+        pingDeltaMs = 0L;
+        mitigationUntilMs = 0L;
     }
 }
