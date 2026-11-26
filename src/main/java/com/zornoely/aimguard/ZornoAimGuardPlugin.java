@@ -5,6 +5,7 @@ import com.zornoely.aimguard.decoy.DecoyNpcManager;
 import com.zornoely.aimguard.lag.LagCompensationManager;
 import com.zornoely.aimguard.mitigation.PunishmentEngine;
 import com.zornoely.aimguard.movement.MovementSimulationChecker;
+import com.zornoely.aimguard.packet.PacketEventsBridge;
 import com.zornoely.aimguard.profile.PlayerCheckProfile;
 import com.zornoely.aimguard.punishment.PunishmentRecordManager;
 import net.kyori.adventure.text.Component;
@@ -42,6 +43,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
     private CombatAnalyzer combatAnalyzer;
     private DecoyNpcManager decoyManager;
     private PunishmentEngine punishmentEngine;
+    private PacketEventsBridge packetEventsBridge;
 
     @Override
     public void onEnable() {
@@ -51,6 +53,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         this.combatAnalyzer = new CombatAnalyzer(this);
         this.decoyManager = new DecoyNpcManager(this);
         this.punishmentEngine = new PunishmentEngine(this);
+        this.packetEventsBridge = new PacketEventsBridge(this);
 
         Bukkit.getPluginManager().registerEvents(this, this);
         if (getCommand("zornoaimguard") != null) {
@@ -60,6 +63,8 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         for (Player online : Bukkit.getOnlinePlayers()) {
             profiles.put(online.getUniqueId(), new PlayerCheckProfile(online.getUniqueId()));
         }
+
+        Bukkit.getScheduler().runTask(this, () -> packetEventsBridge.hook());
 
         Bukkit.getScheduler().runTaskTimer(this, () -> {
             long now = System.currentTimeMillis();
@@ -83,6 +88,9 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
     @Override
     public void onDisable() {
+        if (packetEventsBridge != null) {
+            packetEventsBridge.unhook();
+        }
         if (decoyManager != null) {
             decoyManager.clearAll();
         }
@@ -91,6 +99,10 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
     public PlayerCheckProfile getOrCreateProfile(Player player) {
         return profiles.computeIfAbsent(player.getUniqueId(), PlayerCheckProfile::new);
+    }
+
+    public PlayerCheckProfile getProfileIfPresent(UUID uuid) {
+        return profiles.get(uuid);
     }
 
     public PunishmentRecordManager getPunishmentManager() {
@@ -107,6 +119,10 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
     public DecoyNpcManager getDecoyManager() {
         return decoyManager;
+    }
+
+    public PacketEventsBridge getPacketEventsBridge() {
+        return packetEventsBridge;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -160,6 +176,11 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
         PlayerCheckProfile profile = getOrCreateProfile(attacker);
         long now = System.currentTimeMillis();
+
+        if (decoyManager.handleDecoyAttack(attacker, event.getEntity(), profile, now)) {
+            event.setCancelled(true);
+            return;
+        }
 
         combatAnalyzer.processAttackEvent(attacker, event.getEntity(), profile, now, event);
         decoyManager.evaluateAutoDecoy(attacker, profile, now);
