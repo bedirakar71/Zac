@@ -5,148 +5,217 @@ import com.zornoely.aimguard.profile.PlayerCheckProfile;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.ArmorStand;
-import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.util.Vector;
 
+import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class DecoyNpcManager {
 
-    private static final class ActiveDecoy {
-        final UUID playerId;
-        final ArmorStand decoyEntity;
-        final long spawnedAtMs;
-        double angleRad;
-
-        ActiveDecoy(UUID playerId, ArmorStand decoyEntity, long spawnedAtMs) {
-            this.playerId = playerId;
-            this.decoyEntity = decoyEntity;
-            this.spawnedAtMs = spawnedAtMs;
-            this.angleRad = 0.0;
-        }
-    }
+    private record ActiveDecoy(
+            UUID decoyEntityId,
+            UUID ownerPlayerId,
+            long spawnTimeMs,
+            long expiresAtMs,
+            double angleRad
+    ) {}
 
     private final ZornoAimGuardPlugin plugin;
-    private final Map<UUID, ActiveDecoy> activeDecoys = new ConcurrentHashMap<>();
+    private final Map<UUID, ActiveDecoy> activeByOwner = new ConcurrentHashMap<>();
 
     public DecoyNpcManager(ZornoAimGuardPlugin plugin) {
         this.plugin = plugin;
     }
 
-    public void spawnDecoyForPlayer(Player target, PlayerCheckProfile profile, long nowMs) {
-        removeDecoy(target.getUniqueId());
-        profile.setDecoyLockTicks(0);
-        profile.setDecoyFlagged(false);
-
-        Location spawnLoc = target.getLocation().clone().add(2.3, 0.0, 0.0);
-        ArmorStand stand = (ArmorStand) target.getWorld().spawnEntity(spawnLoc, EntityType.ARMOR_STAND);
-        stand.setVisible(true);
-        stand.setGravity(false);
-        stand.setInvulnerable(true);
-        stand.setSmall(false);
-        stand.setMarker(false);
-        stand.customName(Component.text("§8[Decoy]"));
-        stand.setCustomNameVisible(false);
-
-        for (Player other : Bukkit.getOnlinePlayers()) {
-            if (!other.getUniqueId().equals(target.getUniqueId())) {
-                other.hideEntity(plugin, stand);
-            }
-        }
-
-        activeDecoys.put(target.getUniqueId(), new ActiveDecoy(target.getUniqueId(), stand, nowMs));
-    }
-
     public void evaluateAutoDecoy(Player player, PlayerCheckProfile profile, long nowMs) {
-        if (activeDecoys.containsKey(player.getUniqueId())) {
+        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
+        if (!cfg.getBoolean("decoy.enabled", true)) {
             return;
         }
-        boolean inCombat = (nowMs - profile.getLastCombatTimeMs()) < 4000L;
-        boolean suspicious = profile.getCombatCheatScore() >= 0.45 || profile.getHeuristicVl() >= 3.5;
-        if (inCombat && suspicious && !profile.isLagging()) {
+        if (profile.isLagging() || player.isGliding()) {
+            return;
+        }
+        if (activeByOwner.containsKey(player.getUniqueId())) {
+            return;
+        }
+
+        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 4.5);
+        double totalVl = profile.getMathVl() + profile.getHeuristicVl();
+        boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 4500L;
+
+        if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= 0.58)) {
             spawnDecoyForPlayer(player, profile, nowMs);
         }
     }
 
-    public void tickActiveDecoys() {
-        long now = System.currentTimeMillis();
-        activeDecoys.entrySet().removeIf(entry -> {
-            ActiveDecoy decoy = entry.getValue();
-            Player player = Bukkit.getPlayer(decoy.playerId);
+    public void spawnDecoyForPlayer(Player player, PlayerCheckProfile profile, long nowMs) {
+        removeDecoy(player.getUniqueId());
 
-            if (player == null || !player.isOnline() || !decoy.decoyEntity.isValid() || (now - decoy.spawnedAtMs) > 4500L) {
-                if (decoy.decoyEntity.isValid()) {
-                    decoy.decoyEntity.remove();
-                }
-                return true;
-            }
+        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
+        double radius = cfg.getDouble("decoy.radius-blocks", 2.4);
+        long durationTicks = cfg.getLong("decoy.duration-ticks", 100L);
+        long durationMs = durationTicks * 50L;
 
-            decoy.angleRad += 0.25;
-            double radius = 2.4;
-            double x = player.getLocation().getX() + Math.cos(decoy.angleRad) * radius;
-            double z = player.getLocation().getZ() + Math.sin(decoy.angleRad) * radius;
-            double y = player.getLocation().getY();
-            decoy.decoyEntity.teleport(new Location(player.getWorld(), x, y, z));
-            return false;
+        Location base = player.getLocation();
+        double angle = 0.0;
+        Location spawnLoc = computeOrbitLocation(base, angle, radius);
+        World world = spawnLoc.getWorld();
+        if (world == null) {
+            return;
+        }
+
+        ArmorStand stand = world.spawn(spawnLoc, ArmorStand.class, entity -> {
+            entity.setVisible(true);
+            entity.setGravity(false);
+            entity.setInvulnerable(true);
+            entity.setMarker(false);
+            entity.setSmall(false);
+            entity.setBasePlate(false);
+            entity.setArms(true);
+            entity.setCustomNameVisible(true);
+            entity.customName(Component.text("§8[§dDecoy§8]"));
         });
+
+        profile.setDecoyLockTicks(0);
+        profile.setDecoyLockScore(0.0);
+        profile.setDecoyFlagged(false);
+
+        activeByOwner.put(player.getUniqueId(),
+                new ActiveDecoy(stand.getUniqueId(), player.getUniqueId(), nowMs, nowMs + durationMs, angle));
     }
 
-    public void checkAimLockOnDecoy(Player player, PlayerCheckProfile profile, Location to, long nowMs) {
-        ActiveDecoy decoy = activeDecoys.get(player.getUniqueId());
-        if (decoy == null || !decoy.decoyEntity.isValid() || profile.isLagging()) {
+    public void tickActiveDecoys() {
+        long now = System.currentTimeMillis();
+        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
+        double radius = cfg.getDouble("decoy.radius-blocks", 2.4);
+
+        Iterator> it = activeByOwner.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<UUID, ActiveDecoy> entry = it.next();
+            ActiveDecoy decoy = entry.getValue();
+
+            if (now >= decoy.expiresAtMs()) {
+                removeEntityById(decoy.decoyEntityId());
+                it.remove();
+                continue;
+            }
+
+            Player owner = Bukkit.getPlayer(decoy.ownerPlayerId());
+            if (owner == null || !owner.isOnline() || owner.isDead()) {
+                removeEntityById(decoy.decoyEntityId());
+                it.remove();
+                continue;
+            }
+
+            Entity entity = Bukkit.getEntity(decoy.decoyEntityId());
+            if (!(entity instanceof ArmorStand stand) || !stand.isValid()) {
+                it.remove();
+                continue;
+            }
+
+            double nextAngle = decoy.angleRad() + 0.32;
+            Location targetLoc = computeOrbitLocation(owner.getLocation(), nextAngle, radius);
+            if (stand.getWorld() == targetLoc.getWorld()) {
+                stand.teleport(targetLoc);
+            }
+
+            entry = null;
+            activeByOwner.put(decoy.ownerPlayerId(),
+                    new ActiveDecoy(decoy.decoyEntityId(), decoy.ownerPlayerId(), decoy.spawnTimeMs(), decoy.expiresAtMs(), nextAngle));
+        }
+    }
+
+    public void checkAimLockOnDecoy(Player player, PlayerCheckProfile profile, Location toLoc, long nowMs) {
+        ActiveDecoy decoy = activeByOwner.get(player.getUniqueId());
+        if (decoy == null || toLoc == null || profile.isLagging() || player.isGliding()) {
             return;
         }
 
-        Location eye = to.clone().add(0, player.getEyeHeight(), 0);
-        Location targetHead = decoy.decoyEntity.getLocation().clone().add(0, 1.35, 0);
-        Vector dirToDecoy = targetHead.toVector().subtract(eye.toVector());
-        double dist = dirToDecoy.length();
-        if (dist < 0.2 || dist > 6.5) {
+        Entity entity = Bukkit.getEntity(decoy.decoyEntityId());
+        if (!(entity instanceof ArmorStand stand) || !stand.isValid() || stand.getWorld() != toLoc.getWorld()) {
             return;
         }
 
-        dirToDecoy.normalize();
-        Vector look = eye.getDirection().normalize();
-        double angleDeg = Math.toDegrees(Math.acos(Math.max(-1.0, Math.min(1.0, look.dot(dirToDecoy)))));
+        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
+        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 11.5);
+        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 6);
+        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.72);
+        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.40);
 
-        if (angleDeg < 4.5) {
-            int lockTicks = profile.getDecoyLockTicks() + 1;
-            profile.setDecoyLockTicks(lockTicks);
-            profile.setDecoyLockScore(Math.min(1.0, lockTicks / 14.0));
+        Location eyeLoc = toLoc.clone().add(0.0, player.getEyeHeight(), 0.0);
+        Vector decoyCenter = stand.getLocation().clone().add(0.0, 1.0, 0.0).toVector();
+        Vector toDecoy = decoyCenter.subtract(eyeLoc.toVector());
+        if (toDecoy.lengthSquared() < 1e-6) {
+            return;
+        }
+        toDecoy.normalize();
 
-            if (lockTicks >= 8 && !profile.isDecoyFlagged()) {
+        Vector lookDir = eyeLoc.getDirection().normalize();
+        double dot = Math.max(-1.0, Math.min(1.0, lookDir.dot(toDecoy)));
+        double angleDeg = Math.toDegrees(Math.acos(dot));
+
+        if (angleDeg <= lockFovDeg) {
+            int ticks = profile.getDecoyLockTicks() + 1;
+            profile.setDecoyLockTicks(ticks);
+
+            double normalized = Math.min(1.0, (double) ticks / Math.max(1, minLockTicks * 2));
+            profile.setDecoyLockScore(normalized);
+
+            // Dondurma (mitigation) yapmadan sessizce skor ve belirli esikte VL biriktir
+            if (ticks >= minLockTicks && normalized >= scoreThreshold && !profile.isDecoyFlagged()) {
                 profile.setDecoyFlagged(true);
-                profile.addHeuristicVl(2.1, nowMs);
-                plugin.getPunishmentEngine().evaluateCrossCheck(
+                profile.addHeuristicVl(vlPerFlag, nowMs);
+                plugin.getPunishmentManager().evaluateAndPunish(
                         player,
                         profile,
                         nowMs,
-                        "DecoyAimLock(ticks=" + lockTicks + ",angle=" + String.format("%.1f", angleDeg) + ")"
+                        "DecoyLock(ticks=" + ticks + ",angle=" + String.format("%.1f", angleDeg) + "deg)"
                 );
             }
         } else {
-            profile.setDecoyLockTicks(profile.getDecoyLockTicks() - 1);
-            profile.setDecoyLockScore(profile.getDecoyLockTicks() / 14.0);
+            int current = profile.getDecoyLockTicks();
+            if (current > 0) {
+                profile.setDecoyLockTicks(current - 1);
+            }
+            profile.setDecoyLockScore(Math.max(0.0, profile.getDecoyLockScore() - 0.12));
+            if (profile.getDecoyLockTicks() < Math.max(2, minLockTicks / 2)) {
+                profile.setDecoyFlagged(false);
+            }
         }
     }
 
-    public void removeDecoy(UUID playerId) {
-        ActiveDecoy decoy = activeDecoys.remove(playerId);
-        if (decoy != null && decoy.decoyEntity.isValid()) {
-            decoy.decoyEntity.remove();
+    public void removeDecoy(UUID ownerPlayerId) {
+        ActiveDecoy removed = activeByOwner.remove(ownerPlayerId);
+        if (removed != null) {
+            removeEntityById(removed.decoyEntityId());
         }
     }
 
     public void clearAll() {
-        for (ActiveDecoy decoy : activeDecoys.values()) {
-            if (decoy.decoyEntity.isValid()) {
-                decoy.decoyEntity.remove();
-            }
+        for (ActiveDecoy decoy : activeByOwner.values()) {
+            removeEntityById(decoy.decoyEntityId());
         }
-        activeDecoys.clear();
+        activeByOwner.clear();
+    }
+
+    private void removeEntityById(UUID id) {
+        Entity e = Bukkit.getEntity(id);
+        if (e != null && e.isValid()) {
+            e.remove();
+        }
+    }
+
+    private Location computeOrbitLocation(Location center, double angleRad, double radius) {
+        double x = center.getX() + Math.cos(angleRad) * radius;
+        double y = center.getY() + 0.15;
+        double z = center.getZ() + Math.sin(angleRad) * radius;
+        return new Location(center.getWorld(), x, y, z);
     }
 }
