@@ -15,7 +15,6 @@ import org.bukkit.entity.Villager;
 import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,17 +27,25 @@ public final class DecoyNpcManager {
             UUID ownerPlayerId,
             long spawnTimeMs,
             long expiresAtMs,
-            String slotName
+            String slotName,
+            int slotIndex,
+            int waveNumber
+    ) {}
+
+    private record ChainState(
+            int consecutiveLocks,
+            long lastLockTimeMs,
+            int lastSlotIndex
     ) {}
 
     private static final double[] RELATIVE_YAW_OFFSETS = {
-            180.0, // Tam arka
-            -90.0, // Tam sol
-            90.0,  // Tam sag
-            -135.0,// Sol arka capraz
-            135.0, // Sag arka capraz
-            -55.0, // Sol yan
-            55.0   // Sag yan
+            180.0, // 0: Tam arka
+            -95.0, // 1: Tam sol
+            95.0,  // 2: Tam sag
+            -140.0,// 3: Sol arka capraz
+            140.0, // 4: Sag arka capraz
+            -65.0, // 5: Sol yan
+            65.0   // 6: Sag yan
     };
 
     private static final String[] SLOT_NAMES = {
@@ -54,6 +61,7 @@ public final class DecoyNpcManager {
     private final ZornoAimGuardPlugin plugin;
     private final Map<UUID, ActiveDecoy> activeByOwner = new ConcurrentHashMap<>();
     private final Map<UUID, Long> lastSpawnByOwner = new ConcurrentHashMap<>();
+    private final Map<UUID, ChainState> chainByOwner = new ConcurrentHashMap<>();
 
     public DecoyNpcManager(ZornoAimGuardPlugin plugin) {
         this.plugin = plugin;
@@ -83,21 +91,34 @@ public final class DecoyNpcManager {
         }
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double vlAdd = cfg.getDouble("decoy.vl-per-decoy-flag", 2.20);
+        long reactionMs = Math.max(0L, nowMs - ownerDecoy.spawnTimeMs());
+        long impossibleHitMs = cfg.getLong("decoy.impossible-hit-ms", 115L);
 
-        profile.setDecoyLockTicks(profile.getDecoyLockTicks() + 3);
+        ChainState prev = chainByOwner.getOrDefault(attacker.getUniqueId(), new ChainState(0, 0L, -1));
+        int nextLocks = prev.consecutiveLocks() + 1;
+        chainByOwner.put(attacker.getUniqueId(), new ChainState(nextLocks, nowMs, ownerDecoy.slotIndex()));
+
+        boolean impossibleReaction = reactionMs <= impossibleHitMs;
+        double baseVl = cfg.getDouble("decoy.vl-per-decoy-flag", 2.20);
+        double vlToAdd = impossibleReaction
+                ? (baseVl * 2.4)
+                : (baseVl * (1.0 + (nextLocks * 0.45)));
+
+        profile.setDecoyLockTicks(profile.getDecoyLockTicks() + 4);
         profile.setDecoyLockScore(1.0);
-        profile.addHeuristicVl(vlAdd, nowMs);
+        profile.addHeuristicVl(vlToAdd, nowMs);
 
-        plugin.getPunishmentManager().evaluateAndPunish(
-                attacker,
-                profile,
-                nowMs,
-                "DecoyAuraHit(slot=" + ownerDecoy.slotName() + ",reactionMs=" + (nowMs - ownerDecoy.spawnTimeMs()) + ")"
-        );
+        String tag = impossibleReaction
+                ? "DecoyImpossibleSnapHit(wave=" + ownerDecoy.waveNumber() + ",slot=" + ownerDecoy.slotName() + ",ms=" + reactionMs + ")"
+                : "DecoyAuraHit(wave=" + ownerDecoy.waveNumber() + ",chain=" + nextLocks + ",slot=" + ownerDecoy.slotName() + ",ms=" + reactionMs + ")";
 
-        // Vurus alindiktan sonra NPC kisa surede kaybolur
-        removeDecoy(attacker.getUniqueId());
+        plugin.getPunishmentManager().evaluateAndPunish(attacker, profile, nowMs, tag);
+
+        // Vurustan sonra mevcut NPC kalkar; zincir devam ediyorsa hemen sonraki dalga planlanir
+        removeDecoyOnly(attacker.getUniqueId());
+        if (nextLocks < 3) {
+            scheduleFollowUpWave(attacker, profile, nextLocks + 1, ownerDecoy.slotIndex());
+        }
         return true;
     }
 
@@ -113,7 +134,14 @@ public final class DecoyNpcManager {
             return;
         }
 
-        long cooldownMs = cfg.getLong("decoy.respawn-cooldown-ms", 2400L);
+        ChainState chain = chainByOwner.get(player.getUniqueId());
+        if (chain != null && (nowMs - chain.lastLockTimeMs()) > 12000L) {
+            chainByOwner.remove(player.getUniqueId());
+            chain = null;
+        }
+
+        boolean inActiveChain = chain != null && chain.consecutiveLocks() > 0 && chain.consecutiveLocks() < 3;
+        long cooldownMs = inActiveChain ? 750L : cfg.getLong("decoy.respawn-cooldown-ms", 2200L);
         long lastSpawn = lastSpawnByOwner.getOrDefault(player.getUniqueId(), 0L);
         if ((nowMs - lastSpawn) < cooldownMs) {
             return;
@@ -132,19 +160,26 @@ public final class DecoyNpcManager {
                 && (nowMs - profile.getLastFastTurnMs()) <= 2500L
                 && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 45.0);
 
-        if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap || focused || testOnly)) {
-            spawnDecoyForPlayer(player, profile, nowMs);
+        if (inActiveChain || (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap || focused || testOnly))) {
+            int wave = inActiveChain ? (chain.consecutiveLocks() + 1) : 1;
+            int avoidSlot = inActiveChain ? chain.lastSlotIndex() : -1;
+            spawnDecoyWave(player, profile, nowMs, wave, avoidSlot);
         }
     }
 
     public void spawnDecoyForPlayer(Player player, PlayerCheckProfile profile, long nowMs) {
-        removeDecoy(player.getUniqueId());
+        chainByOwner.remove(player.getUniqueId());
+        spawnDecoyWave(player, profile, nowMs, 1, -1);
+    }
+
+    private void spawnDecoyWave(Player player, PlayerCheckProfile profile, long nowMs, int waveNumber, int avoidSlotIndex) {
+        removeDecoyOnly(player.getUniqueId());
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         double distance = cfg.getDouble("decoy.spawn-distance-blocks", 2.45);
-        long visibleMs = cfg.getLong("decoy.visible-duration-ms", 1250L);
+        long visibleMs = cfg.getLong("decoy.visible-duration-ms", 1150L);
 
-        int idx = ThreadLocalRandom.current().nextInt(RELATIVE_YAW_OFFSETS.length);
+        int idx = pickDifferentSlot(avoidSlotIndex);
         double yawOffset = RELATIVE_YAW_OFFSETS[idx];
         String slotName = SLOT_NAMES[idx];
 
@@ -154,7 +189,6 @@ public final class DecoyNpcManager {
             return;
         }
 
-        // Oyuncuya dogru bakar sekilde yonlendir
         Vector lookAtPlayer = player.getEyeLocation().toVector().subtract(spawnLoc.toVector().add(new Vector(0, 1.4, 0)));
         if (lookAtPlayer.lengthSquared() > 1e-6) {
             spawnLoc.setDirection(lookAtPlayer.normalize());
@@ -171,7 +205,33 @@ public final class DecoyNpcManager {
 
         lastSpawnByOwner.put(player.getUniqueId(), nowMs);
         activeByOwner.put(player.getUniqueId(),
-                new ActiveDecoy(spawned.getUniqueId(), player.getUniqueId(), nowMs, nowMs + visibleMs, slotName));
+                new ActiveDecoy(spawned.getUniqueId(), player.getUniqueId(), nowMs, nowMs + visibleMs, slotName, idx, waveNumber));
+    }
+
+    private int pickDifferentSlot(int avoidSlotIndex) {
+        int len = RELATIVE_YAW_OFFSETS.length;
+        int idx = ThreadLocalRandom.current().nextInt(len);
+        if (idx == avoidSlotIndex) {
+            idx = (idx + 1 + ThreadLocalRandom.current().nextInt(len - 1)) % len;
+        }
+        return idx;
+    }
+
+    private void scheduleFollowUpWave(Player player, PlayerCheckProfile profile, int nextWave, int avoidSlotIndex) {
+        UUID playerId = player.getUniqueId();
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            Player online = Bukkit.getPlayer(playerId);
+            if (online == null || !online.isOnline() || online.isDead()) {
+                return;
+            }
+            PlayerCheckProfile currentProfile = plugin.getProfileIfPresent(playerId);
+            if (currentProfile == null || currentProfile.isLagging()) {
+                return;
+            }
+            if (!activeByOwner.containsKey(playerId)) {
+                spawnDecoyWave(online, currentProfile, System.currentTimeMillis(), nextWave, avoidSlotIndex);
+            }
+        }, 16L); // ~0.8 saniye sonra farkli yonde 2./3. NPC cikar
     }
 
     private Entity spawnNpcEntity(World world, Location spawnLoc) {
@@ -257,7 +317,7 @@ public final class DecoyNpcManager {
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         double instantLockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 8.5);
-        long minReactionMs = cfg.getLong("decoy.min-lock-reaction-ms", 60L);
+        long minReactionMs = cfg.getLong("decoy.min-lock-reaction-ms", 45L);
         double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 2.20);
 
         long elapsedMs = nowMs - decoy.spawnTimeMs();
@@ -280,21 +340,40 @@ public final class DecoyNpcManager {
         if (angleDeg <= instantLockFovDeg && !profile.isDecoyFlagged()) {
             profile.setDecoyFlagged(true);
             profile.setDecoyLockTicks(profile.getDecoyLockTicks() + 1);
-            profile.setDecoyLockScore(1.0);
-            profile.addHeuristicVl(vlPerFlag, nowMs);
+
+            ChainState prev = chainByOwner.getOrDefault(player.getUniqueId(), new ChainState(0, 0L, -1));
+            int nextLocks = prev.consecutiveLocks() + 1;
+            chainByOwner.put(player.getUniqueId(), new ChainState(nextLocks, nowMs, decoy.slotIndex()));
+
+            double chainMultiplier = 1.0 + ((nextLocks - 1) * 0.55);
+            double vlToAdd = vlPerFlag * chainMultiplier;
+
+            profile.setDecoyLockScore(Math.min(1.0, 0.45 * nextLocks));
+            profile.addHeuristicVl(vlToAdd, nowMs);
 
             plugin.getPunishmentManager().evaluateAndPunish(
                     player,
                     profile,
                     nowMs,
-                    "DecoyInstantLock(slot=" + decoy.slotName()
+                    "DecoyWave" + decoy.waveNumber() + "Lock(chain=" + nextLocks
+                            + ",slot=" + decoy.slotName()
                             + ",angle=" + String.format("%.1f", angleDeg) + "deg"
                             + ",ms=" + elapsedMs + ")"
             );
+
+            // Ilk NPC'ye aninda kitlendiyse kisa sure sonra farkli yonde 2. ve 3. NPC'yi tetikle
+            if (nextLocks < 3) {
+                scheduleFollowUpWave(player, profile, nextLocks + 1, decoy.slotIndex());
+            }
         }
     }
 
     public void removeDecoy(UUID ownerPlayerId) {
+        chainByOwner.remove(ownerPlayerId);
+        removeDecoyOnly(ownerPlayerId);
+    }
+
+    private void removeDecoyOnly(UUID ownerPlayerId) {
         ActiveDecoy removed = activeByOwner.remove(ownerPlayerId);
         if (removed != null) {
             removeEntityById(removed.decoyEntityId());
@@ -307,6 +386,7 @@ public final class DecoyNpcManager {
         }
         activeByOwner.clear();
         lastSpawnByOwner.clear();
+        chainByOwner.clear();
     }
 
     private void removeEntityById(UUID id) {
@@ -319,7 +399,6 @@ public final class DecoyNpcManager {
     private Location computeSpotLocation(Player player, double yawOffsetDeg, double distance) {
         Location base = player.getLocation();
         double rad = Math.toRadians(base.getYaw() + yawOffsetDeg);
-        // Minecraft yaw: -sin(yaw), cos(yaw) yatay ileri yonudur
         double dirX = -Math.sin(rad);
         double dirZ = Math.cos(rad);
 
