@@ -39,18 +39,24 @@ public final class DecoyNpcManager {
         if (!cfg.getBoolean("decoy.enabled", true)) {
             return;
         }
-        if (profile.isLagging() || player.isGliding()) {
+        if (profile.isLagging()) {
             return;
         }
         if (activeByOwner.containsKey(player.getUniqueId())) {
             return;
         }
 
-        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 4.5);
-        double totalVl = profile.getMathVl() + profile.getHeuristicVl();
-        boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 4500L;
+        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 2.2);
+        double minScore = cfg.getDouble("decoy.auto-spawn-min-score", 0.30);
+        boolean spawnOnSuspiciousHit = cfg.getBoolean("decoy.spawn-on-suspicious-hit", true);
 
-        if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= 0.58)) {
+        double totalVl = profile.getMathVl() + profile.getHeuristicVl();
+        boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 6000L;
+        boolean recentSnap = spawnOnSuspiciousHit
+                && (nowMs - profile.getLastFastTurnMs()) <= 1500L
+                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 68.0);
+
+        if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap)) {
             spawnDecoyForPlayer(player, profile, nowMs);
         }
     }
@@ -59,8 +65,8 @@ public final class DecoyNpcManager {
         removeDecoy(player.getUniqueId());
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double radius = cfg.getDouble("decoy.radius-blocks", 2.4);
-        long durationTicks = cfg.getLong("decoy.duration-ticks", 100L);
+        double radius = cfg.getDouble("decoy.radius-blocks", 2.2);
+        long durationTicks = cfg.getLong("decoy.duration-ticks", 140L);
         long durationMs = durationTicks * 50L;
 
         Location base = player.getLocation();
@@ -94,7 +100,7 @@ public final class DecoyNpcManager {
     public void tickActiveDecoys() {
         long now = System.currentTimeMillis();
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double radius = cfg.getDouble("decoy.radius-blocks", 2.4);
+        double radius = cfg.getDouble("decoy.radius-blocks", 2.2);
 
         for (Map.Entry<UUID, ActiveDecoy> entry : new ArrayList<>(activeByOwner.entrySet())) {
             UUID ownerId = entry.getKey();
@@ -119,7 +125,7 @@ public final class DecoyNpcManager {
                 continue;
             }
 
-            double nextAngle = decoy.angleRad() + 0.32;
+            double nextAngle = decoy.angleRad() + 0.36;
             Location targetLoc = computeOrbitLocation(owner.getLocation(), nextAngle, radius);
             if (stand.getWorld() == targetLoc.getWorld()) {
                 stand.teleport(targetLoc);
@@ -137,7 +143,7 @@ public final class DecoyNpcManager {
 
     public void checkAimLockOnDecoy(Player player, PlayerCheckProfile profile, Location toLoc, long nowMs) {
         ActiveDecoy decoy = activeByOwner.get(player.getUniqueId());
-        if (decoy == null || toLoc == null || profile.isLagging() || player.isGliding()) {
+        if (decoy == null || toLoc == null || profile.isLagging()) {
             return;
         }
 
@@ -147,10 +153,10 @@ public final class DecoyNpcManager {
         }
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 11.5);
+        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 11.0);
         int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 6);
         double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.72);
-        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.40);
+        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.10);
 
         Location eyeLoc = toLoc.clone().add(0.0, player.getEyeHeight(), 0.0);
         Vector decoyCenter = stand.getLocation().clone().add(0.0, 1.0, 0.0).toVector();
