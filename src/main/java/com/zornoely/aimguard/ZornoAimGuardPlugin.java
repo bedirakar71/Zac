@@ -30,12 +30,17 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, TabCompleter {
 
+    private record FocusSession(UUID targetId, UUID watcherId, long expiresAtMs, long lastReportMs) {}
+
     private final Map<UUID, PlayerCheckProfile> profiles = new ConcurrentHashMap<>();
+    private final Set<UUID> testLogOnlyPlayers = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, FocusSession> focusByTarget = new ConcurrentHashMap<>();
 
     private PunishmentRecordManager punishmentManager;
     private LagCompensationManager lagManager;
@@ -78,6 +83,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
                 lagManager.recordSample(player, profile, now, tps);
                 punishmentEngine.applyDecay(profile, now);
                 decoyManager.evaluateAutoDecoy(player, profile, now);
+                tickFocusSession(player, profile, now);
             }
         }, 20L, 20L);
 
@@ -94,6 +100,8 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         if (decoyManager != null) {
             decoyManager.clearAll();
         }
+        focusByTarget.clear();
+        testLogOnlyPlayers.clear();
         profiles.clear();
     }
 
@@ -103,6 +111,75 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
     public PlayerCheckProfile getProfileIfPresent(UUID uuid) {
         return profiles.get(uuid);
+    }
+
+    public boolean isTestLogOnly(UUID uuid) {
+        return uuid != null && testLogOnlyPlayers.contains(uuid);
+    }
+
+    public boolean isPlayerFocused(UUID uuid, long nowMs) {
+        if (uuid == null) {
+            return false;
+        }
+        FocusSession session = focusByTarget.get(uuid);
+        if (session == null) {
+            return false;
+        }
+        if (nowMs >= session.expiresAtMs()) {
+            return false;
+        }
+        return true;
+    }
+
+    public void notifyFocusTelemetry(Player target, PlayerCheckProfile profile, String detail) {
+        long now = System.currentTimeMillis();
+        FocusSession session = focusByTarget.get(target.getUniqueId());
+        if (session == null || now >= session.expiresAtMs()) {
+            return;
+        }
+        if ((now - session.lastReportMs()) < 1500L) {
+            return;
+        }
+        focusByTarget.put(target.getUniqueId(), new FocusSession(
+                session.targetId(),
+                session.watcherId(),
+                session.expiresAtMs(),
+                now
+        ));
+
+        String msg = "§d[Analiz] §f" + target.getName() + " §8» §e" + detail
+                + " §7(MathVL=" + String.format("%.2f", profile.getMathVl())
+                + ", AimVL=" + String.format("%.2f", profile.getHeuristicVl()) + ")";
+        sendFocusMessage(session.watcherId(), msg);
+    }
+
+    private void tickFocusSession(Player player, PlayerCheckProfile profile, long nowMs) {
+        FocusSession session = focusByTarget.get(player.getUniqueId());
+        if (session == null) {
+            return;
+        }
+        if (nowMs >= session.expiresAtMs()) {
+            focusByTarget.remove(player.getUniqueId());
+            sendFocusMessage(session.watcherId(), buildFocusSummary(player.getName(), profile, "Süre doldu"));
+        }
+    }
+
+    private String buildFocusSummary(String playerName, PlayerCheckProfile profile, String reason) {
+        return "§d[ZornoAimGuard Analiz Ozeti - " + playerName + "] §7(" + reason + ") §8» "
+                + "§fMathVL: §e" + String.format("%.2f", profile.getMathVl())
+                + " §7| §fAimVL: §e" + String.format("%.2f", profile.getHeuristicVl())
+                + " §7| §fSkor: §c" + String.format("%.1f%%", profile.getCombatCheatScore() * 100.0)
+                + " §7| §fDecoy: §c" + String.format("%.1f%%", profile.getDecoyLockScore() * 100.0);
+    }
+
+    private void sendFocusMessage(UUID watcherId, String message) {
+        getLogger().info(message.replaceAll("§[0-9a-fk-or]", ""));
+        if (watcherId != null) {
+            Player watcher = Bukkit.getPlayer(watcherId);
+            if (watcher != null && watcher.isOnline()) {
+                watcher.sendMessage(Component.text(message));
+            }
+        }
     }
 
     public PunishmentRecordManager getPunishmentManager() {
@@ -124,7 +201,6 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
     public PacketEventsBridge getPacketEventsBridge() {
         return packetEventsBridge;
     }
-
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPreLogin(AsyncPlayerPreLoginEvent event) {
         PunishmentRecordManager.BanEntry active = punishmentManager.getActiveBan(event.getName());
@@ -148,6 +224,11 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
     public void onQuit(PlayerQuitEvent event) {
         UUID id = event.getPlayer().getUniqueId();
         decoyManager.removeDecoy(id);
+        if (packetEventsBridge != null) {
+            packetEventsBridge.clearPlayer(id);
+        }
+        focusByTarget.remove(id);
+        testLogOnlyPlayers.remove(id);
         profiles.remove(id);
     }
 
@@ -224,7 +305,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
 
         if (args.length == 0) {
-            sender.sendMessage(Component.text("§d[ZornoAimGuard] §f/" + label + " <stats|decoy|reset|reload|ban>"));
+            sender.sendMessage(Component.text("§d[ZornoAimGuard] §f/" + label + " <stats|decoy|reset|reload|ban|analiz|test>"));
             return true;
         }
 
@@ -269,6 +350,73 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
             return true;
         }
 
+        if (args[0].equalsIgnoreCase("test")) {
+            if (args.length < 3) {
+                sender.sendMessage(Component.text("§cKullanim: /" + label + " test <ac|kapat> <oyuncu>"));
+                return true;
+            }
+            String mode = args[1].toLowerCase(Locale.ROOT);
+            Player target = Bukkit.getPlayerExact(args[2]);
+            if (target == null) {
+                sender.sendMessage(Component.text("§cOyuncu aktif degil."));
+                return true;
+            }
+            if (mode.equals("ac") || mode.equals("on")) {
+                testLogOnlyPlayers.add(target.getUniqueId());
+                sender.sendMessage(Component.text("§d[ZornoAimGuard] §a" + target.getName() + " §fiçin TEST modu açıldı: Kick ve ban uygulanmaz, yalnızca log düşer."));
+                return true;
+            }
+            if (mode.equals("kapat") || mode.equals("off")) {
+                testLogOnlyPlayers.remove(target.getUniqueId());
+                sender.sendMessage(Component.text("§d[ZornoAimGuard] §e" + target.getName() + " §fiçin TEST modu kapatıldı, normal ceza sistemi aktif."));
+                return true;
+            }
+            sender.sendMessage(Component.text("§cKullanim: /" + label + " test <ac|kapat> <oyuncu>"));
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("analiz")) {
+            if (args.length < 2) {
+                sender.sendMessage(Component.text("§cKullanim: /" + label + " analiz <oyuncu> [süre_sn]"));
+                return true;
+            }
+            Player target = Bukkit.getPlayerExact(args[1]);
+            if (target == null) {
+                sender.sendMessage(Component.text("§cOyuncu aktif degil."));
+                return true;
+            }
+
+            long now = System.currentTimeMillis();
+            FocusSession existing = focusByTarget.get(target.getUniqueId());
+            if (existing != null && now < existing.expiresAtMs() && args.length == 2) {
+                focusByTarget.remove(target.getUniqueId());
+                PlayerCheckProfile p = getOrCreateProfile(target);
+                sender.sendMessage(Component.text(buildFocusSummary(target.getName(), p, "Manuel kapatıldı")));
+                return true;
+            }
+
+            int seconds = 45;
+            if (args.length >= 3) {
+                try {
+                    seconds = Math.max(10, Math.min(300, Integer.parseInt(args[2])));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+
+            UUID watcherId = (sender instanceof Player pSender) ? pSender.getUniqueId() : null;
+            focusByTarget.put(target.getUniqueId(), new FocusSession(
+                    target.getUniqueId(),
+                    watcherId,
+                    now + (seconds * 1000L),
+                    0L
+            ));
+
+            PlayerCheckProfile p = getOrCreateProfile(target);
+            decoyManager.spawnDecoyForPlayer(target, p, now);
+            sender.sendMessage(Component.text("§d[ZornoAimGuard] §a" + target.getName() + " §f" + seconds + " saniye boyunca özel analiz moduna alındı (Decoy aktif)."));
+            return true;
+        }
+
         if (args.length < 2) {
             sender.sendMessage(Component.text("§cOyuncu adi gir: /" + label + " " + args[0] + " <oyuncu>"));
             return true;
@@ -288,6 +436,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
             sender.sendMessage(Component.text("§fKillAura/Aim VL: §e" + String.format("%.2f", profile.getHeuristicVl())));
             sender.sendMessage(Component.text("§fKillAura Skoru: §c" + String.format("%.1f%%", profile.getCombatCheatScore() * 100.0)));
             sender.sendMessage(Component.text("§fDecoy Kilitlenme: §c" + String.format("%.1f%%", profile.getDecoyLockScore() * 100.0)));
+            sender.sendMessage(Component.text("§fTest Modu: §b" + (isTestLogOnly(target.getUniqueId()) ? "ACIK (Log Only)" : "KAPALI")));
             sender.sendMessage(Component.text("§fKick Sayisi: §6" + punishmentManager.getKickCount(target.getName())));
             sender.sendMessage(Component.text("§fPing / Lag: §b" + target.getPing() + "ms §7(Lag=" + profile.isLagging() + ")"));
             return true;
@@ -316,18 +465,25 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
 
         if (args.length == 1) {
-            return filterPrefix(List.of("stats", "decoy", "reset", "reload", "ban"), args[0]);
+            return filterPrefix(List.of("stats", "decoy", "reset", "reload", "ban", "analiz", "test"), args[0]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("ban")) {
             return filterPrefix(List.of("at", "kaldır"), args[1]);
         }
 
-        if (args.length == 2 && (args[0].equalsIgnoreCase("stats") || args[0].equalsIgnoreCase("decoy") || args[0].equalsIgnoreCase("reset"))) {
+        if (args.length == 2 && args[0].equalsIgnoreCase("test")) {
+            return filterPrefix(List.of("ac", "kapat"), args[1]);
+        }
+
+        if (args.length == 2 && (args[0].equalsIgnoreCase("stats")
+                || args[0].equalsIgnoreCase("decoy")
+                || args[0].equalsIgnoreCase("reset")
+                || args[0].equalsIgnoreCase("analiz"))) {
             return filterPrefix(punishmentManager.getKnownPlayerNames(), args[1]);
         }
 
-        if (args.length == 3 && args[0].equalsIgnoreCase("ban")) {
+        if (args.length == 3 && (args[0].equalsIgnoreCase("ban") || args[0].equalsIgnoreCase("test"))) {
             return filterPrefix(punishmentManager.getKnownPlayerNames(), args[2]);
         }
 
@@ -344,4 +500,4 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
         return out;
     }
-}
+                }
