@@ -1,7 +1,7 @@
 punishments:
   escalate-kick-to-ban: true
-  kick-at-vl: 9.0
-  ban-at-vl: 14.5
+  kick-at-vl: 10.0
+  ban-at-vl: 16.0
   max-kicks-before-ban: 2
   ban-duration-days: 7
   notify-staff-in-chat: true
@@ -15,45 +15,49 @@ environment:
 
 decoy:
   enabled: true
-  auto-spawn-min-vl: 2.0
-  auto-spawn-min-score: 0.30
+  auto-spawn-min-vl: 2.2
+  auto-spawn-min-score: 0.28
   spawn-on-suspicious-hit: true
   radius-blocks: 2.1
-  duration-ticks: 200
-  lock-fov-deg: 15.0
+  duration-ticks: 220
+  # Onunden gecerken yanlislikla vurmayi gormezden gel, takip/kilitlenmeyi yakala
+  ignore-accidental-pass-hit: true
+  lock-fov-deg: 11.5
   freeze-on-decoy-lock: false
-  min-lock-ticks-for-score: 3
-  lock-score-threshold: 0.34
-  vl-per-decoy-flag: 1.95
+  min-lock-ticks-for-score: 6
+  lock-score-threshold: 0.50
+  vl-per-decoy-flag: 1.80
 
 movement:
   horiz-offset-threshold: 0.38
   horiz-severe-threshold: 0.65
   min-sustained-window-ms: 1100
   min-sustained-hits: 3
-  horiz-vl-for-punish: 8.5
+  horiz-vl-for-punish: 9.0
 
 combat:
-  max-reach-blocks: 3.32
-  lag-extra-tolerance: 0.50
-  vl-per-reach-cancel: 1.50
+  # 4 blok civari reach'i engelle; koklemedigi surece tek basina banlama
+  max-reach-blocks: 3.15
+  lag-extra-tolerance: 0.35
+  vl-per-reach-cancel: 0.55
+  min-consecutive-reach-for-ban: 7
   block-back-hits: true
   max-attack-look-angle-deg: 95.0
-  snap-turn-min-deg: 56.0
-  snap-window-ms: 260
-  vl-per-back-hit: 1.45
+  snap-turn-min-deg: 54.0
+  snap-window-ms: 280
+  vl-per-back-hit: 1.40
   block-wall-hits: true
-  vl-per-wall-hit: 2.10
+  vl-per-wall-hit: 2.00
   block-cobweb-hits: false
-  vl-per-cobweb-hit: 0.60
+  vl-per-cobweb-hit: 0.50
   block-fake-criticals: false
   min-fake-crit-streak: 999
   vl-per-fake-crit: 0.0
 
 killaura-aimassist:
   enabled: true
-  min-hits-in-window: 5
-  max-aim-error-deg: 1.95
-  score-threshold: 0.54
-  vl-per-flag: 2.15
+  min-hits-in-window: 4
+  max-aim-error-deg: 3.20
+  score-threshold: 0.44
+  vl-per-flag: 2.20
   
