@@ -37,7 +37,7 @@ public final class CombatAnalyzer {
         Location rewoundLoc = plugin.getLagManager().getRewoundLocation(target.getUniqueId(), attacker.getPing(), nowMs);
         Location compareLoc = (rewoundLoc != null) ? rewoundLoc : livingTarget.getLocation();
 
-        Vector targetCenter = compareLoc.toVector().add(0, livingTarget.getHeight() * 0.5, 0);
+        Vector targetCenter = compareLoc.clone().add(0.0, livingTarget.getHeight() * 0.5, 0.0).toVector();
         double distance = attacker.getEyeLocation().toVector().distance(targetCenter);
         double aimErrorDeg = computeAimAngleErrorDeg(attacker.getEyeLocation(), targetCenter);
         boolean alignedStrafe = attacker.getVelocity().length() > 0.08;
