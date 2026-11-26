@@ -68,21 +68,20 @@ public final class CombatAnalyzer {
         );
         double aimErrorDeg = computeAimAngleErrorDeg(attacker.getEyeLocation(), upperAimPoint);
 
-        // 1. Arkadan vurus veya ani flick + KillAura kilitlenmesi / sapmasi
         boolean blockBackHits = cfg.getBoolean("combat.block-back-hits", true);
-        double maxAttackLookAngle = cfg.getDouble("combat.max-attack-look-angle-deg", 92.0);
-        long snapWindowMs = cfg.getLong("combat.snap-window-ms", 300L);
-        double snapTurnMin = cfg.getDouble("combat.snap-turn-min-deg", 50.0);
+        double maxAttackLookAngle = cfg.getDouble("combat.max-attack-look-angle-deg", 94.0);
+        long snapWindowMs = cfg.getLong("combat.snap-window-ms", 280L);
+        double snapTurnMin = cfg.getDouble("combat.snap-turn-min-deg", 52.0);
         boolean recentFastTurn = (nowMs - profile.getLastFastTurnMs()) <= snapWindowMs
                 && profile.getLastFastTurnDeg() >= snapTurnMin;
         double effectiveMaxAngle = profile.isLagging() ? (maxAttackLookAngle + 25.0) : maxAttackLookAngle;
 
         boolean isBackHit = aimErrorDeg > effectiveMaxAngle;
-        boolean isSnapAuraHit = recentFastTurn && (aimErrorDeg <= 9.5 || aimErrorDeg > 40.0);
+        boolean isSnapAuraHit = recentFastTurn && (aimErrorDeg <= 8.0 || aimErrorDeg > 42.0);
 
         if (blockBackHits && (isBackHit || isSnapAuraHit) && !profile.isLagging()) {
             event.setCancelled(true);
-            profile.addHeuristicVl(cfg.getDouble("combat.vl-per-back-hit", 1.55), nowMs);
+            profile.addHeuristicVl(cfg.getDouble("combat.vl-per-back-hit", 1.50), nowMs);
             plugin.getPunishmentManager().evaluateAndPunish(
                     attacker,
                     profile,
@@ -93,7 +92,6 @@ public final class CombatAnalyzer {
             return;
         }
 
-        // 2. Reach kontrolu (4 blok civarini engeller; ust uste cok reach yoksa banlamaz)
         double baseMaxReach = cfg.getDouble("combat.max-reach-blocks", 3.15);
         double lagExtra = cfg.getDouble("combat.lag-extra-tolerance", 0.35);
         boolean recentKb = (nowMs - profile.getLastKnockbackTimeMs()) < 1200L;
@@ -107,7 +105,7 @@ public final class CombatAnalyzer {
             int minReachStreakForPunish = cfg.getInt("combat.min-consecutive-reach-for-ban", 7);
 
             if (!profile.isLagging()) {
-                double vlPerReach = cfg.getDouble("combat.vl-per-reach-cancel", 0.65);
+                double vlPerReach = cfg.getDouble("combat.vl-per-reach-cancel", 0.60);
                 double vlToAdd = (reachStreak >= minReachStreakForPunish) ? (vlPerReach * 2.2) : (vlPerReach * 0.45);
                 profile.addMathVl(vlToAdd, nowMs);
 
@@ -127,11 +125,10 @@ public final class CombatAnalyzer {
             profile.resetConsecutiveReach();
         }
 
-        // 3. Duvar arkasi vurus kontrolu
         if (cfg.getBoolean("combat.block-wall-hits", true) && isBlockedByWall(attacker, box, hitboxSurfaceDist)) {
             event.setCancelled(true);
             if (!profile.isLagging()) {
-                profile.addMathVl(cfg.getDouble("combat.vl-per-wall-hit", 2.10), nowMs);
+                profile.addMathVl(cfg.getDouble("combat.vl-per-wall-hit", 2.05), nowMs);
                 plugin.getPunishmentManager().evaluateAndPunish(
                         attacker,
                         profile,
@@ -142,7 +139,6 @@ public final class CombatAnalyzer {
             return;
         }
 
-        // 4. Cobweb kontrolu
         if (cfg.getBoolean("combat.block-cobweb-hits", false)) {
             boolean attackerInWeb = isInCobweb(attacker.getBoundingBox(), attacker.getWorld());
             boolean targetInWeb = isInCobweb(box, livingTarget.getWorld());
@@ -159,7 +155,6 @@ public final class CombatAnalyzer {
             }
         }
 
-        // 5. KillAura & AimAssist analizi (kilitlenme, vurus ritmi ve donus tutarliligi)
         boolean alignedStrafe = attacker.getVelocity().length() > 0.05;
 
         Deque<PlayerCheckProfile.HitSample> hits = profile.getHitSamples();
@@ -172,10 +167,10 @@ public final class CombatAnalyzer {
             return;
         }
 
-        int minHits = cfg.getInt("killaura-aimassist.min-hits-in-window", 3);
-        double maxAimErr = cfg.getDouble("killaura-aimassist.max-aim-error-deg", 3.60);
-        double scoreThreshold = cfg.getDouble("killaura-aimassist.score-threshold", 0.38);
-        double vlPerFlag = cfg.getDouble("killaura-aimassist.vl-per-flag", 2.45);
+        int minHits = cfg.getInt("killaura-aimassist.min-hits-in-window", 4);
+        double maxAimErr = cfg.getDouble("killaura-aimassist.max-aim-error-deg", 3.30);
+        double scoreThreshold = cfg.getDouble("killaura-aimassist.score-threshold", 0.43);
+        double vlPerFlag = cfg.getDouble("killaura-aimassist.vl-per-flag", 2.35);
 
         double aimConsistency = computeAimLockConsistency(hits, maxAimErr);
         double rotationPattern = evaluateRotationCheatPattern(profile.getRotationSamples(), recentFastTurn);
@@ -183,19 +178,18 @@ public final class CombatAnalyzer {
         double avgAimError = hits.stream().mapToDouble(PlayerCheckProfile.HitSample::aimErrorDeg).average().orElse(15.0);
         double cps = clicks.size() / (COMBAT_WINDOW_MS / 1000.0);
 
-        // KillAura'da hedefe hizli/sabit aci ve ritmik vurus (daha dar pencere: son 2200ms)
-        long recentBurstHits = hits.stream().filter(h -> (nowMs - h.timestampMs()) <= 2200L).count();
+        long recentBurstHits = hits.stream().filter(h -> (nowMs - h.timestampMs()) <= 2000L).count();
 
         double score = 0.0;
         if (hits.size() >= minHits) {
-            if (avgAimError <= maxAimErr && aimConsistency >= 0.45) {
-                score += 0.32;
+            if (avgAimError <= maxAimErr && aimConsistency >= 0.50) {
+                score += 0.30;
             }
-            if (recentBurstHits >= 3 && avgAimError <= (maxAimErr * 0.90)) {
-                score += 0.22;
+            if (recentBurstHits >= 3 && avgAimError <= (maxAimErr * 0.85) && aimConsistency >= 0.45) {
+                score += 0.20;
             }
-            if (cps > 8.0 && cpsStdDev < 13.0) {
-                score += 0.16;
+            if (cps > 9.5 && cpsStdDev < 11.0) {
+                score += 0.14;
             }
             score += rotationPattern * 0.38;
         }
@@ -216,7 +210,7 @@ public final class CombatAnalyzer {
     }
 
     private double computeAimLockConsistency(Deque<PlayerCheckProfile.HitSample> hits, double maxAimErr) {
-        if (hits.size() < 3) {
+        if (hits.size() < 4) {
             return 0.0;
         }
         int tightHits = 0;
@@ -235,18 +229,19 @@ public final class CombatAnalyzer {
         double stdDev = Math.sqrt(sqDiff / hits.size());
         double tightRatio = (double) tightHits / hits.size();
 
-        double stabilityScore = Math.max(0.0, 1.0 - (stdDev / 4.5));
+        double stabilityScore = Math.max(0.0, 1.0 - (stdDev / 4.2));
         return Math.min(1.0, (tightRatio * 0.55) + (stabilityScore * 0.45));
     }
 
     private double evaluateRotationCheatPattern(Deque<PlayerCheckProfile.RotationSample> samples, boolean recentFastTurn) {
-        if (samples.size() < 10) {
-            return recentFastTurn ? 0.28 : 0.0;
+        if (samples.size() < 14) {
+            return recentFastTurn ? 0.22 : 0.0;
         }
 
         int count = 0;
         int microAssistCount = 0;
         int proportionalStepCount = 0;
+        int lowGcdCount = 0;
         Float prevDeltaYaw = null;
 
         for (PlayerCheckProfile.RotationSample s : samples) {
@@ -254,12 +249,15 @@ public final class CombatAnalyzer {
                 break;
             }
             count++;
-            if (s.deltaYaw() > 0.12f && s.deltaYaw() < 5.5f) {
+            if (s.deltaYaw() > 0.15f && s.deltaYaw() < 4.8f) {
                 microAssistCount++;
             }
-            if (prevDeltaYaw != null && prevDeltaYaw > 0.20f && s.deltaYaw() > 0.10f) {
+            if (s.gcdYaw() > 0.0 && s.gcdYaw() < 0.025) {
+                lowGcdCount++;
+            }
+            if (prevDeltaYaw != null && prevDeltaYaw > 0.25f && s.deltaYaw() > 0.12f) {
                 float ratio = s.deltaYaw() / prevDeltaYaw;
-                if (ratio > 0.25f && ratio < 0.82f) {
+                if (ratio > 0.30f && ratio < 0.75f) {
                     proportionalStepCount++;
                 }
             }
@@ -267,15 +265,20 @@ public final class CombatAnalyzer {
         }
 
         double microRatio = (double) microAssistCount / count;
+        double lowGcdRatio = (double) lowGcdCount / count;
         double signal = 0.0;
-        if (microRatio > 0.58 && count >= 14) {
-            signal += 0.34;
+
+        if (microRatio > 0.64 && count >= 18) {
+            signal += 0.28;
         }
-        if (proportionalStepCount >= 4) {
-            signal += 0.42;
+        if (proportionalStepCount >= 5) {
+            signal += 0.38;
+        }
+        if (lowGcdRatio > 0.55 && count >= 16) {
+            signal += 0.16;
         }
         if (recentFastTurn) {
-            signal += 0.26;
+            signal += 0.20;
         }
         return Math.min(1.0, signal);
     }
@@ -352,7 +355,7 @@ public final class CombatAnalyzer {
     }
 
     private double computeClickIntervalStdDev(Deque<Long> clicks) {
-        if (clicks.size() < 3) {
+        if (clicks.size() < 4) {
             return 99.0;
         }
         Long[] arr = clicks.toArray(new Long[0]);
@@ -370,4 +373,4 @@ public final class CombatAnalyzer {
         }
         return Math.sqrt(sqSum / n);
     }
-}
+                                    }
