@@ -50,6 +50,8 @@ public final class PlayerCheckProfile {
 
     private int consecutiveCritHits;
     private long lastCritHitMs;
+    private long lastFastTurnMs;
+    private float lastFastTurnDeg;
 
     private double lastSimulatedVy;
     private boolean hasSimulatedVy;
@@ -129,6 +131,10 @@ public final class PlayerCheckProfile {
         }
     }
 
+    public void clearMitigation() {
+        this.mitigationUntilMs = 0L;
+    }
+
     public int getLastPingMs() {
         return lastPingMs;
     }
@@ -200,7 +206,7 @@ public final class PlayerCheckProfile {
     }
 
     public int recordAndGetConsecutiveCrits(long nowMs) {
-        if ((nowMs - lastCritHitMs) <= 2200L) {
+        if ((nowMs - lastCritHitMs) <= 1800L) {
             consecutiveCritHits++;
         } else {
             consecutiveCritHits = 1;
@@ -211,6 +217,19 @@ public final class PlayerCheckProfile {
 
     public void resetConsecutiveCrits() {
         consecutiveCritHits = 0;
+    }
+
+    public void recordFastTurn(float deltaYawDeg, long nowMs) {
+        this.lastFastTurnDeg = deltaYawDeg;
+        this.lastFastTurnMs = nowMs;
+    }
+
+    public long getLastFastTurnMs() {
+        return lastFastTurnMs;
+    }
+
+    public float getLastFastTurnDeg() {
+        return lastFastTurnDeg;
     }
 
     public double getLastSimulatedVy() {
@@ -237,6 +256,7 @@ public final class PlayerCheckProfile {
         decoyLockTicks = 0;
         decoyFlagged = false;
         consecutiveCritHits = 0;
+        lastFastTurnDeg = 0.0f;
         mitigationUntilMs = 0L;
         clickTimestamps.clear();
         rotationSamples.clear();
