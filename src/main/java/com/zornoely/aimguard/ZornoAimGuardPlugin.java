@@ -78,7 +78,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
         Bukkit.getScheduler().runTaskTimer(this, () -> decoyManager.tickActiveDecoys(), 5L, 5L);
 
-        getLogger().info("ZornoAimGuard v2.3.0 baslatildi.");
+        getLogger().info("ZornoAimGuard v2.4.0 baslatildi.");
     }
 
     @Override
@@ -162,26 +162,18 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         long now = System.currentTimeMillis();
 
         combatAnalyzer.processAttackEvent(attacker, event.getEntity(), profile, now, event);
+        decoyManager.evaluateAutoDecoy(attacker, profile, now);
         if (!event.isCancelled()) {
             punishmentEngine.applyCombatMitigation(attacker, event.getEntity(), profile, event);
         }
     }
 
-    /**
-     * Duvara carpinca can gitmemesi icin carpma / fall hasarini iptal eder
-     * ve oyuncunun hareket profilini guvenli duruma alir.
-     */
     @EventHandler(priority = EventPriority.HIGHEST)
-    public void onWallImpactOrFallDamage(EntityDamageEvent event) {
+    public void onEnvironmentalDamage(EntityDamageEvent event) {
         if (!(event.getEntity() instanceof Player player)) {
             return;
         }
         if (event instanceof EntityDamageByEntityEvent) {
-            return;
-        }
-        boolean blockWallImpact = punishmentManager.getPunishmentsConfig()
-                .getBoolean("environment.block-wall-impact-damage", true);
-        if (!blockWallImpact) {
             return;
         }
         EntityDamageEvent.DamageCause cause = event.getCause();
@@ -189,7 +181,13 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
                 || cause == EntityDamageEvent.DamageCause.FLY_INTO_WALL
                 || cause == EntityDamageEvent.DamageCause.CONTACT
                 || cause == EntityDamageEvent.DamageCause.CUSTOM) {
-            event.setCancelled(true);
+            boolean allowImpactDamage = punishmentManager.getPunishmentsConfig()
+                    .getBoolean("environment.allow-impact-damage", true);
+            if (allowImpactDamage && event.isCancelled()) {
+                event.setCancelled(false);
+            } else if (!allowImpactDamage) {
+                event.setCancelled(true);
+            }
             PlayerCheckProfile profile = getOrCreateProfile(player);
             profile.setLastKnockbackTimeMs(System.currentTimeMillis());
             profile.setHasSimulatedVy(false);
