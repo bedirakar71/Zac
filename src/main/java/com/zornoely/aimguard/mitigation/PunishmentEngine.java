@@ -2,18 +2,15 @@ package com.zornoely.aimguard.mitigation;
 
 import com.zornoely.aimguard.ZornoAimGuardPlugin;
 import com.zornoely.aimguard.profile.PlayerCheckProfile;
-import net.kyori.adventure.text.Component;
-import org.bukkit.BanList;
-import org.bukkit.Bukkit;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
-import org.bukkit.util.Vector;
-
-import java.util.Date;
 
 public final class PunishmentEngine {
+
+    private static final long DECAY_INTERVAL_MS = 2500L;
 
     private final ZornoAimGuardPlugin plugin;
 
@@ -22,64 +19,63 @@ public final class PunishmentEngine {
     }
 
     public void applyDecay(PlayerCheckProfile profile, long nowMs) {
-        if ((nowMs - profile.getLastFlagTimeMs()) < 3500L) {
+        long elapsed = nowMs - profile.getLastDecayTimeMs();
+        if (elapsed < DECAY_INTERVAL_MS) {
             return;
         }
-        profile.decayVl(0.18, 0.40, nowMs);
-    }
-
-    public void evaluateCrossCheck(Player player, PlayerCheckProfile profile, long nowMs, String reason) {
-        if (profile.isLagging()) {
-            return;
-        }
-
-        double mathVl = profile.getMathVl();
-        double heuristicVl = profile.getHeuristicVl();
-        double combatScore = profile.getCombatCheatScore();
-        double decoyScore = profile.getDecoyLockScore();
-
-        // Once Silent Mitigation ile avantaj kesilir (ban atmadan once kanit biriktirme)
-        if (heuristicVl >= 3.2 || combatScore >= 0.55 || decoyScore >= 0.55) {
-            profile.activateMitigation(7000L);
-        }
-
-        // Cross-Check Ban: tek bir sinyalle degil, birlesik veya yuksek kesinlikle ban
-        boolean hardMathBan = mathVl >= 10.5;
-        boolean strongAimCrossCheck = heuristicVl >= 7.5
-                && combatScore >= 0.72
-                && (decoyScore >= 0.55 || profile.getRotationSamples().size() >= 40);
-
-        if (hardMathBan || strongAimCrossCheck) {
-            executeBan(player, profile, reason);
-        }
-    }
-
-    public void applyCombatMitigation(Player attacker, Entity victim, PlayerCheckProfile profile, EntityDamageByEntityEvent event) {
-        if (!profile.isMitigating() || profile.isLagging()) {
-            return;
-        }
-        event.setDamage(event.getDamage() * 0.78);
-        Vector pushBack = attacker.getLocation().getDirection().multiply(-0.15).setY(0.06);
-        attacker.setVelocity(attacker.getVelocity().add(pushBack));
+        double steps = elapsed / (double) DECAY_INTERVAL_MS;
+        profile.decayVl(0.22 * steps, 0.20 * steps, nowMs);
     }
 
     public void applyMovementMitigation(Player player, PlayerCheckProfile profile, PlayerMoveEvent event) {
-        if (!profile.isMitigating() || profile.isLagging() || event.getTo() == null) {
+        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
+        boolean freezeLowSignals = cfg.getBoolean("environment.freeze-on-low-signals", false);
+        boolean elytraSafe = cfg.getBoolean("environment.elytra-safe-mode", true);
+
+        if (!freezeLowSignals) {
             return;
         }
-        Vector delta = event.getTo().toVector().subtract(event.getFrom().toVector());
-        delta.setX(delta.getX() * 0.95);
-        delta.setZ(delta.getZ() * 0.95);
-        event.setTo(event.getFrom().clone().add(delta));
+        if (profile.isLagging() || (elytraSafe && player.isGliding())) {
+            profile.clearMitigation();
+            return;
+        }
+        if (!profile.isMitigating()) {
+            return;
+        }
+
+        // Yalnizca cok yuksek ve dogrulanmis ihlallerde hafif hareket sinirlamasi
+        if ((profile.getMathVl() + profile.getHeuristicVl()) < 7.0) {
+            return;
+        }
+
+        if (event.getTo() != null && event.getFrom() != null) {
+            double dx = event.getTo().getX() - event.getFrom().getX();
+            double dz = event.getTo().getZ() - event.getFrom().getZ();
+            double dist = Math.hypot(dx, dz);
+            if (dist > 0.42) {
+                double scale = 0.42 / dist;
+                event.setTo(event.getFrom().clone().add(dx * scale, event.getTo().getY() - event.getFrom().getY(), dz * scale));
+            }
+        }
     }
 
-    private void executeBan(Player player, PlayerCheckProfile profile, String reason) {
-        Date expiry = new Date(System.currentTimeMillis() + (7L * 24L * 60L * 60L * 1000L));
-        String message = "§c§lZornoAimGuard §8» §7Supheli hareket/aim davranisi tespit edildi (§f" + reason + "§7).";
+    public void applyCombatMitigation(Player attacker, Entity target, PlayerCheckProfile profile, EntityDamageByEntityEvent event) {
+        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
+        boolean freezeLowSignals = cfg.getBoolean("environment.freeze-on-low-signals", false);
+        boolean elytraSafe = cfg.getBoolean("environment.elytra-safe-mode", true);
 
-        Bukkit.getBanList(BanList.Type.NAME).addBan(player.getName(), message, expiry, "ZornoAimGuard");
-        player.kick(Component.text(message));
-        profile.resetAll();
-        plugin.getDecoyManager().removeDecoy(player.getUniqueId());
+        if (!freezeLowSignals) {
+            return;
+        }
+        if (profile.isLagging() || (elytraSafe && attacker.isGliding())) {
+            return;
+        }
+        if (!profile.isMitigating()) {
+            return;
+        }
+
+        if (profile.getCombatCheatScore() >= 0.75) {
+            event.setDamage(event.getDamage() * 0.75);
+        }
     }
 }
