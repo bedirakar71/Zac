@@ -55,7 +55,7 @@ public final class DecoyNpcManager {
             return false;
         }
 
-        // Vurus her zaman iptal edilir ki yanlislikla denk gelse bile savas hasari/knockback bozulmasin
+        // Yanlislikla denk gelen vurusun gercek savas hasari/knockback akisini bozmamasi icin her zaman iptal edilir
         ActiveDecoy ownerDecoy = activeByOwner.get(attacker.getUniqueId());
         if (ownerDecoy == null || !ownerDecoy.decoyEntityId().equals(target.getUniqueId()) || profile.isLagging()) {
             return true;
@@ -65,6 +65,7 @@ public final class DecoyNpcManager {
         boolean ignorePassHit = cfg.getBoolean("decoy.ignore-accidental-pass-hit", true);
         int minHitsForFlag = cfg.getInt("decoy.min-decoy-hits-for-flag", 3);
         long hitWindowMs = cfg.getLong("decoy.decoy-hit-window-ms", 1800L);
+        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 6);
 
         Deque<Long> hits = decoyHitHistory.computeIfAbsent(attacker.getUniqueId(), k -> new ArrayDeque<>());
         hits.addLast(nowMs);
@@ -72,8 +73,8 @@ public final class DecoyNpcManager {
             hits.pollFirst();
         }
 
-        // Onunden gecerken 1-2 kez kazara vurulursa log atmadan yoksay
-        if (ignorePassHit && hits.size() < minHitsForFlag && profile.getDecoyLockTicks() < cfg.getInt("decoy.min-lock-ticks-for-score", 6)) {
+        // Etrafinda donerken onunden gecerken 1-2 kez kazara vurulursa log atmadan yoksay
+        if (ignorePassHit && hits.size() < minHitsForFlag && profile.getDecoyLockTicks() < minLockTicks) {
             return true;
         }
 
