@@ -27,9 +27,6 @@ public final class CombatAnalyzer {
         }
 
         profile.setLastCombatTimeMs(nowMs);
-        if (livingTarget instanceof Player) {
-            profile.getOrCreateIfNeeded();
-        }
 
         Deque<Long> clicks = profile.getClickTimestamps();
         clicks.addLast(nowMs);
@@ -56,7 +53,6 @@ public final class CombatAnalyzer {
         double avgAimError = hits.stream().mapToDouble(PlayerCheckProfile.HitSample::aimErrorDeg).average().orElse(15.0);
         double cps = clicks.size() / (COMBAT_WINDOW_MS / 1000.0);
 
-        // False-positive onlemi: yeterli vurus ve pencere verisi olmadan yuksek skor uretilmez
         double score = 0.0;
         if (hits.size() >= 5) {
             if (cps > 16.0 && cpsStdDev < 5.5) {
