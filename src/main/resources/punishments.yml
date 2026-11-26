@@ -1,7 +1,7 @@
 punishments:
   escalate-kick-to-ban: true
-  kick-at-vl: 8.5
-  ban-at-vl: 13.5
+  kick-at-vl: 14.0
+  ban-at-vl: 22.0
   max-kicks-before-ban: 2
   ban-duration-days: 7
   notify-staff-in-chat: true
@@ -14,42 +14,45 @@ environment:
 
 decoy:
   enabled: true
-  auto-spawn-min-vl: 4.5
-  radius-blocks: 2.4
-  duration-ticks: 100
-  lock-fov-deg: 11.5
+  # Hile sinyali gorulur gorulmez NPC donsun
+  auto-spawn-min-vl: 2.2
+  auto-spawn-min-score: 0.30
+  spawn-on-suspicious-hit: true
+  radius-blocks: 2.2
+  duration-ticks: 140
+  lock-fov-deg: 11.0
   freeze-on-decoy-lock: false
   min-lock-ticks-for-score: 6
   lock-score-threshold: 0.72
-  vl-per-decoy-flag: 1.40
+  vl-per-decoy-flag: 1.10
 
 movement:
-  horiz-offset-threshold: 0.16
-  horiz-severe-threshold: 0.38
-  min-consecutive-horiz-flags: 3
-  horiz-vl-for-punish: 6.5
+  horiz-offset-threshold: 0.24
+  horiz-severe-threshold: 0.50
+  min-consecutive-horiz-flags: 4
+  horiz-vl-for-punish: 9.5
 
 combat:
-  max-reach-blocks: 3.30
-  lag-extra-tolerance: 0.45
-  vl-per-reach-cancel: 1.15
+  max-reach-blocks: 3.35
+  lag-extra-tolerance: 0.55
+  vl-per-reach-cancel: 0.90
   block-back-hits: true
-  max-attack-look-angle-deg: 74.0
-  snap-turn-min-deg: 44.0
-  snap-window-ms: 380
-  vl-per-back-hit: 1.85
+  max-attack-look-angle-deg: 96.0
+  snap-turn-min-deg: 68.0
+  snap-window-ms: 220
+  vl-per-back-hit: 0.95
   block-wall-hits: true
-  vl-per-wall-hit: 1.60
+  vl-per-wall-hit: 1.25
   block-cobweb-hits: true
-  vl-per-cobweb-hit: 1.25
+  vl-per-cobweb-hit: 0.80
   block-fake-criticals: true
-  min-fake-crit-streak: 6
-  vl-per-fake-crit: 1.25
+  min-fake-crit-streak: 12
+  vl-per-fake-crit: 0.70
 
 killaura-aimassist:
   enabled: true
-  min-hits-in-window: 4
-  max-aim-error-deg: 2.40
-  score-threshold: 0.64
-  vl-per-flag: 1.75
+  min-hits-in-window: 5
+  max-aim-error-deg: 2.10
+  score-threshold: 0.72
+  vl-per-flag: 1.25
   
