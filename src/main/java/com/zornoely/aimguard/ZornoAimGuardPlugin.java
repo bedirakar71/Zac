@@ -78,7 +78,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
         Bukkit.getScheduler().runTaskTimer(this, () -> decoyManager.tickActiveDecoys(), 5L, 5L);
 
-        getLogger().info("ZornoAimGuard v2.2.0 baslatildi.");
+        getLogger().info("ZornoAimGuard v2.3.0 baslatildi.");
     }
 
     @Override
@@ -168,15 +168,20 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
     }
 
     /**
-     * Duvara carpma / cevresel hasar veren diger pluginlerin hasarini engellemez;
-     * cevresel hasar sirasinda oyuncunun duvara carpma ivmesini guvenli sayar.
+     * Duvara carpinca can gitmemesi icin carpma / fall hasarini iptal eder
+     * ve oyuncunun hareket profilini guvenli duruma alir.
      */
     @EventHandler(priority = EventPriority.HIGHEST)
-    public void onEnvironmentalDamage(EntityDamageEvent event) {
+    public void onWallImpactOrFallDamage(EntityDamageEvent event) {
         if (!(event.getEntity() instanceof Player player)) {
             return;
         }
         if (event instanceof EntityDamageByEntityEvent) {
+            return;
+        }
+        boolean blockWallImpact = punishmentManager.getPunishmentsConfig()
+                .getBoolean("environment.block-wall-impact-damage", true);
+        if (!blockWallImpact) {
             return;
         }
         EntityDamageEvent.DamageCause cause = event.getCause();
@@ -184,12 +189,11 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
                 || cause == EntityDamageEvent.DamageCause.FLY_INTO_WALL
                 || cause == EntityDamageEvent.DamageCause.CONTACT
                 || cause == EntityDamageEvent.DamageCause.CUSTOM) {
-            if (event.isCancelled()) {
-                event.setCancelled(false);
-            }
+            event.setCancelled(true);
             PlayerCheckProfile profile = getOrCreateProfile(player);
             profile.setLastKnockbackTimeMs(System.currentTimeMillis());
             profile.setHasSimulatedVy(false);
+            profile.clearMitigation();
         }
     }
 
