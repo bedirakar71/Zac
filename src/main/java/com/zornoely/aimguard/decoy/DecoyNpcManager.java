@@ -46,15 +46,15 @@ public final class DecoyNpcManager {
             return;
         }
 
-        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 2.2);
+        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 2.0);
         double minScore = cfg.getDouble("decoy.auto-spawn-min-score", 0.30);
         boolean spawnOnSuspiciousHit = cfg.getBoolean("decoy.spawn-on-suspicious-hit", true);
 
         double totalVl = profile.getMathVl() + profile.getHeuristicVl();
-        boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 6000L;
+        boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 8000L;
         boolean recentSnap = spawnOnSuspiciousHit
-                && (nowMs - profile.getLastFastTurnMs()) <= 1500L
-                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 68.0);
+                && (nowMs - profile.getLastFastTurnMs()) <= 2000L
+                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 56.0);
 
         if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap)) {
             spawnDecoyForPlayer(player, profile, nowMs);
@@ -65,8 +65,8 @@ public final class DecoyNpcManager {
         removeDecoy(player.getUniqueId());
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double radius = cfg.getDouble("decoy.radius-blocks", 2.2);
-        long durationTicks = cfg.getLong("decoy.duration-ticks", 140L);
+        double radius = cfg.getDouble("decoy.radius-blocks", 2.1);
+        long durationTicks = cfg.getLong("decoy.duration-ticks", 200L);
         long durationMs = durationTicks * 50L;
 
         Location base = player.getLocation();
@@ -100,7 +100,7 @@ public final class DecoyNpcManager {
     public void tickActiveDecoys() {
         long now = System.currentTimeMillis();
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double radius = cfg.getDouble("decoy.radius-blocks", 2.2);
+        double radius = cfg.getDouble("decoy.radius-blocks", 2.1);
 
         for (Map.Entry<UUID, ActiveDecoy> entry : new ArrayList<>(activeByOwner.entrySet())) {
             UUID ownerId = entry.getKey();
@@ -125,7 +125,7 @@ public final class DecoyNpcManager {
                 continue;
             }
 
-            double nextAngle = decoy.angleRad() + 0.36;
+            double nextAngle = decoy.angleRad() + 0.40;
             Location targetLoc = computeOrbitLocation(owner.getLocation(), nextAngle, radius);
             if (stand.getWorld() == targetLoc.getWorld()) {
                 stand.teleport(targetLoc);
@@ -153,10 +153,10 @@ public final class DecoyNpcManager {
         }
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 11.0);
-        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 6);
-        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.72);
-        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.10);
+        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 15.0);
+        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 3);
+        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.34);
+        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.95);
 
         Location eyeLoc = toLoc.clone().add(0.0, player.getEyeHeight(), 0.0);
         Vector decoyCenter = stand.getLocation().clone().add(0.0, 1.0, 0.0).toVector();
@@ -174,7 +174,7 @@ public final class DecoyNpcManager {
             int ticks = profile.getDecoyLockTicks() + 1;
             profile.setDecoyLockTicks(ticks);
 
-            double normalized = Math.min(1.0, (double) ticks / Math.max(1, minLockTicks * 2));
+            double normalized = Math.min(1.0, (double) ticks / Math.max(1, minLockTicks));
             profile.setDecoyLockScore(normalized);
 
             if (ticks >= minLockTicks && normalized >= scoreThreshold && !profile.isDecoyFlagged()) {
@@ -192,8 +192,8 @@ public final class DecoyNpcManager {
             if (current > 0) {
                 profile.setDecoyLockTicks(current - 1);
             }
-            profile.setDecoyLockScore(Math.max(0.0, profile.getDecoyLockScore() - 0.12));
-            if (profile.getDecoyLockTicks() < Math.max(2, minLockTicks / 2)) {
+            profile.setDecoyLockScore(Math.max(0.0, profile.getDecoyLockScore() - 0.06));
+            if (profile.getDecoyLockTicks() < 1) {
                 profile.setDecoyFlagged(false);
             }
         }
