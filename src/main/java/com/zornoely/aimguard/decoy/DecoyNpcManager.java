@@ -12,7 +12,8 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.util.Vector;
 
-import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -96,27 +97,27 @@ public final class DecoyNpcManager {
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         double radius = cfg.getDouble("decoy.radius-blocks", 2.4);
 
-        Iterator> it = activeByOwner.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<UUID, ActiveDecoy> entry = it.next();
+        List> snapshot = new ArrayList<>(activeByOwner.entrySet());
+        for (Map.Entry<UUID, ActiveDecoy> entry : snapshot) {
+            UUID ownerId = entry.getKey();
             ActiveDecoy decoy = entry.getValue();
 
             if (now >= decoy.expiresAtMs()) {
                 removeEntityById(decoy.decoyEntityId());
-                it.remove();
+                activeByOwner.remove(ownerId);
                 continue;
             }
 
             Player owner = Bukkit.getPlayer(decoy.ownerPlayerId());
             if (owner == null || !owner.isOnline() || owner.isDead()) {
                 removeEntityById(decoy.decoyEntityId());
-                it.remove();
+                activeByOwner.remove(ownerId);
                 continue;
             }
 
             Entity entity = Bukkit.getEntity(decoy.decoyEntityId());
             if (!(entity instanceof ArmorStand stand) || !stand.isValid()) {
-                it.remove();
+                activeByOwner.remove(ownerId);
                 continue;
             }
 
@@ -126,7 +127,7 @@ public final class DecoyNpcManager {
                 stand.teleport(targetLoc);
             }
 
-            entry.setValue(new ActiveDecoy(
+            activeByOwner.put(ownerId, new ActiveDecoy(
                     decoy.decoyEntityId(),
                     decoy.ownerPlayerId(),
                     decoy.spawnTimeMs(),
