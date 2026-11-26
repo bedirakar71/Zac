@@ -275,20 +275,13 @@ public final class PunishmentRecordManager {
         if (plugin.isPlayerBypassed(player)) {
             return;
         }
-        if (profile.isLagging()) {
-            return;
-        }
 
         double totalVl = profile.getMathVl() + profile.getHeuristicVl();
         boolean testOnly = plugin.isTestLogOnly(player.getUniqueId());
         boolean focused = plugin.isPlayerFocused(player.getUniqueId(), nowMs);
 
-        boolean shouldLog = punishmentsConfig.getBoolean("punishments.log-to-console", true)
-                || totalVl >= 4.0
-                || testOnly
-                || focused;
-
-        if (shouldLog) {
+        // Bypass kapaliysa ve lag yoksa her tespitte konsola log kesin duser
+        if (!profile.isLagging()) {
             String logLine = "[ZornoAimGuard] " + player.getName()
                     + " -> " + detail
                     + " | mathVL=" + String.format("%.2f", profile.getMathVl())
@@ -302,8 +295,7 @@ public final class PunishmentRecordManager {
             }
         }
 
-        // Test modundaki oyuncuya asla kick veya ban uygulanmaz; yalnizca log duser
-        if (testOnly) {
+        if (testOnly || profile.isLagging()) {
             return;
         }
 
