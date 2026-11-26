@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -260,7 +261,7 @@ public final class DecoyNpcManager {
                 spawnedAsPacketPlayer,
                 fallbackEntity
         ));
-    }
+     }
     private boolean sendPacketPlayerNpc(Player viewer, int entityId, UUID npcUuid, Location loc) {
         try {
             var api = PacketEvents.getAPI();
@@ -288,14 +289,14 @@ public final class DecoyNpcManager {
 
             WrapperPlayServerSpawnEntity spawnPacket = new WrapperPlayServerSpawnEntity(
                     entityId,
-                    npcUuid,
+                    Optional.of(npcUuid),
                     EntityTypes.PLAYER,
                     new Vector3d(loc.getX(), loc.getY(), loc.getZ()),
                     loc.getPitch(),
                     loc.getYaw(),
                     loc.getYaw(),
                     0,
-                    null
+                    Optional.empty()
             );
             api.getPlayerManager().sendPacket(viewer, spawnPacket);
 
