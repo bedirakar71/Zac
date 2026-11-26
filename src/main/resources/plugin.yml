@@ -2,21 +2,21 @@ name: ZornoAimGuard
 version: 2.4.0
 main: com.zornoely.aimguard.ZornoAimGuardPlugin
 api-version: '1.21'
-softdepend:
-  - PacketEvents
-  - ViaVersion
+author: ZornoEly
+description: PacketEvents tabanli gelişmiş AimAssist, KillAura, Reach ve hareket koruma eklentisi.
 
 commands:
   zornoaimguard:
-    description: ZornoAimGuard yonetim komutlari
-    usage: /zornoaimguard <stats|decoy|reset|reload|ban>
+    description: ZornoAimGuard ana yönetim ve analiz komutu
+    usage: /<command> <stats|decoy|reset|reload|ban|analiz|test>
     permission: zornoaimguard.admin
+    aliases: [zag, aimguard]
 
 permissions:
   zornoaimguard.admin:
-    description: ZornoAimGuard komutlarini kullanma yetkisi
+    description: ZornoAimGuard yönetim, test ve analiz komutlarına erişim
     default: op
   zornoaimguard.bypass:
-    description: ZornoAimGuard kontrollerinden muafiyet
-    default: false
+    description: Anti-cheat kontrol ve ceza muafiyeti (OP dahil değil, sadece açıkça verilenlere)
+    default: not op
     
