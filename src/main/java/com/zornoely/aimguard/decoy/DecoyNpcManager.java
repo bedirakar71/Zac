@@ -13,7 +13,6 @@ import org.bukkit.entity.Player;
 import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -97,8 +96,7 @@ public final class DecoyNpcManager {
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         double radius = cfg.getDouble("decoy.radius-blocks", 2.4);
 
-        List> snapshot = new ArrayList<>(activeByOwner.entrySet());
-        for (Map.Entry<UUID, ActiveDecoy> entry : snapshot) {
+        for (Map.Entry<UUID, ActiveDecoy> entry : new ArrayList<>(activeByOwner.entrySet())) {
             UUID ownerId = entry.getKey();
             ActiveDecoy decoy = entry.getValue();
 
