@@ -1,7 +1,7 @@
 punishments:
   escalate-kick-to-ban: true
-  kick-at-vl: 12.0
-  ban-at-vl: 18.0
+  kick-at-vl: 9.0
+  ban-at-vl: 14.5
   max-kicks-before-ban: 2
   ban-duration-days: 7
   notify-staff-in-chat: true
@@ -15,46 +15,45 @@ environment:
 
 decoy:
   enabled: true
-  auto-spawn-min-vl: 5.5
-  auto-spawn-min-score: 0.65
-  spawn-on-suspicious-hit: false
-  radius-blocks: 2.3
-  duration-ticks: 120
-  lock-fov-deg: 7.5
+  auto-spawn-min-vl: 2.0
+  auto-spawn-min-score: 0.30
+  spawn-on-suspicious-hit: true
+  radius-blocks: 2.1
+  duration-ticks: 200
+  lock-fov-deg: 15.0
   freeze-on-decoy-lock: false
-  min-lock-ticks-for-score: 10
-  lock-score-threshold: 0.85
-  vl-per-decoy-flag: 1.20
+  min-lock-ticks-for-score: 3
+  lock-score-threshold: 0.34
+  vl-per-decoy-flag: 1.95
 
 movement:
-  horiz-offset-threshold: 0.42
-  horiz-severe-threshold: 0.72
-  min-sustained-window-ms: 1200
-  min-sustained-hits: 4
-  horiz-vl-for-punish: 10.0
+  horiz-offset-threshold: 0.38
+  horiz-severe-threshold: 0.65
+  min-sustained-window-ms: 1100
+  min-sustained-hits: 3
+  horiz-vl-for-punish: 8.5
 
 combat:
-  max-reach-blocks: 3.30
-  lag-extra-tolerance: 0.55
-  vl-per-reach-cancel: 1.10
+  max-reach-blocks: 3.32
+  lag-extra-tolerance: 0.50
+  vl-per-reach-cancel: 1.50
   block-back-hits: true
-  max-attack-look-angle-deg: 105.0
-  snap-turn-min-deg: 75.0
-  snap-window-ms: 180
-  vl-per-back-hit: 0.80
+  max-attack-look-angle-deg: 95.0
+  snap-turn-min-deg: 56.0
+  snap-window-ms: 260
+  vl-per-back-hit: 1.45
   block-wall-hits: true
-  vl-per-wall-hit: 1.50
+  vl-per-wall-hit: 2.10
   block-cobweb-hits: false
-  vl-per-cobweb-hit: 0.50
-  # Duz vuruslarda false atmamasi icin tamamen kapali
+  vl-per-cobweb-hit: 0.60
   block-fake-criticals: false
   min-fake-crit-streak: 999
   vl-per-fake-crit: 0.0
 
 killaura-aimassist:
   enabled: true
-  min-hits-in-window: 6
-  max-aim-error-deg: 1.40
-  score-threshold: 0.78
-  vl-per-flag: 1.80
+  min-hits-in-window: 5
+  max-aim-error-deg: 1.95
+  score-threshold: 0.54
+  vl-per-flag: 2.15
   
