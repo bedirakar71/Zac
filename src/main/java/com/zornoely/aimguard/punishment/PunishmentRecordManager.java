@@ -284,7 +284,7 @@ public final class PunishmentRecordManager {
             profile.activateMitigation(7000L);
         }
 
-        boolean strongCrossCheck = profile.getCombatCheatScore() >= punishmentsConfig.getDouble("killaura-aimassist.score-threshold", 0.68)
+        boolean strongCrossCheck = profile.getCombatCheatScore() >= punishmentsConfig.getDouble("killaura-aimassist.score-threshold", 0.62)
                 && (profile.getDecoyLockScore() >= 0.50 || profile.getRotationSamples().size() >= 32);
 
         int kicksSoFar = getKickCount(player.getName());
