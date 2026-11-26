@@ -1,6 +1,8 @@
 package com.zornoely.aimguard.decoy;
 
 import com.github.retrooper.packetevents.PacketEvents;
+import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
+import com.github.retrooper.packetevents.protocol.player.GameMode;
 import com.github.retrooper.packetevents.protocol.player.UserProfile;
 import com.github.retrooper.packetevents.util.Vector3d;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerDestroyEntities;
@@ -277,7 +279,7 @@ public final class DecoyNpcManager {
                             profile,
                             false,
                             20,
-                            com.github.retrooper.packetevents.protocol.player.GameMode.SURVIVAL,
+                            GameMode.SURVIVAL,
                             Component.empty(),
                             null
                     ))
@@ -287,7 +289,7 @@ public final class DecoyNpcManager {
             WrapperPlayServerSpawnEntity spawnPacket = new WrapperPlayServerSpawnEntity(
                     entityId,
                     npcUuid,
-                    com.github.retrooper.packetevents.protocol.entity.types.EntityTypes.PLAYER,
+                    EntityTypes.PLAYER,
                     new Vector3d(loc.getX(), loc.getY(), loc.getZ()),
                     loc.getPitch(),
                     loc.getYaw(),
@@ -308,7 +310,7 @@ public final class DecoyNpcManager {
                                     profile,
                                     false,
                                     20,
-                                    com.github.retrooper.packetevents.protocol.player.GameMode.SURVIVAL,
+                                    GameMode.SURVIVAL,
                                     Component.empty(),
                                     null
                             ))
@@ -333,7 +335,7 @@ public final class DecoyNpcManager {
                         new WrapperPlayServerPlayerInfo.PlayerData(
                                 Component.empty(),
                                 new UserProfile(npcUuid, ""),
-                                com.github.retrooper.packetevents.protocol.player.GameMode.SURVIVAL,
+                                GameMode.SURVIVAL,
                                 0
                         )
                 ));
@@ -527,4 +529,3 @@ public final class DecoyNpcManager {
         return new Location(world, x, y, z);
     }
 }
-            
