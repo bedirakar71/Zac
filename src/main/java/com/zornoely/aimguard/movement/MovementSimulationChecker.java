@@ -45,8 +45,7 @@ public final class MovementSimulationChecker {
         double gcdYaw = computeGcd(deltaYaw);
         double gcdPitch = computeGcd(deltaPitch);
 
-        // 360 veya hizli donus kaydedilir ama tek basina yanlis ceza uretmez
-        double snapThreshold = cfg.getDouble("combat.snap-turn-min-deg", 75.0);
+        double snapThreshold = cfg.getDouble("combat.snap-turn-min-deg", 56.0);
         boolean snapped = deltaYaw >= snapThreshold;
         if (snapped) {
             profile.recordFastTurn(deltaYaw, nowMs);
@@ -74,11 +73,11 @@ public final class MovementSimulationChecker {
         double allowedHoriz = computeAllowedHorizontalSpeed(player, from, nowMs, profile);
         double horizOffset = horizDist - allowedHoriz;
 
-        double offsetThresh = cfg.getDouble("movement.horiz-offset-threshold", 0.42);
-        double severeThresh = cfg.getDouble("movement.horiz-severe-threshold", 0.72);
-        long windowMs = cfg.getLong("movement.min-sustained-window-ms", 1200L);
-        int minHits = cfg.getInt("movement.min-sustained-hits", 4);
-        double vlForPunish = cfg.getDouble("movement.horiz-vl-for-punish", 10.0);
+        double offsetThresh = cfg.getDouble("movement.horiz-offset-threshold", 0.38);
+        double severeThresh = cfg.getDouble("movement.horiz-severe-threshold", 0.65);
+        long windowMs = cfg.getLong("movement.min-sustained-window-ms", 1100L);
+        int minHits = cfg.getInt("movement.min-sustained-hits", 3);
+        double vlForPunish = cfg.getDouble("movement.horiz-vl-for-punish", 8.5);
 
         if (horizOffset > offsetThresh && !profile.isLagging()) {
             HorizWindow current = horizWindows.get(player.getUniqueId());
@@ -88,7 +87,7 @@ public final class MovementSimulationChecker {
                 int nextCount = current.count() + 1;
                 horizWindows.put(player.getUniqueId(), new HorizWindow(current.windowStartMs(), nextCount));
 
-                if (nextCount >= minHits && (nowMs - current.windowStartMs()) >= 400L) {
+                if (nextCount >= minHits && (nowMs - current.windowStartMs()) >= 350L) {
                     double vlAdd = Math.min(1.40, horizOffset * 1.6);
                     profile.addMathVl(vlAdd, nowMs);
                     if (horizOffset > severeThresh && profile.getMathVl() >= vlForPunish) {
