@@ -15,8 +15,10 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class MovementSimulationChecker {
 
+    private record HorizWindow(long windowStartMs, int count) {}
+
     private final ZornoAimGuardPlugin plugin;
-    private final Map<UUID, Integer> consecutiveHorizFlags = new ConcurrentHashMap<>();
+    private final Map<UUID, HorizWindow> horizWindows = new ConcurrentHashMap<>();
 
     public MovementSimulationChecker(ZornoAimGuardPlugin plugin) {
         this.plugin = plugin;
@@ -43,7 +45,8 @@ public final class MovementSimulationChecker {
         double gcdYaw = computeGcd(deltaYaw);
         double gcdPitch = computeGcd(deltaPitch);
 
-        double snapThreshold = cfg.getDouble("combat.snap-turn-min-deg", 44.0);
+        // 360 veya hizli donus kaydedilir ama tek basina yanlis ceza uretmez
+        double snapThreshold = cfg.getDouble("combat.snap-turn-min-deg", 75.0);
         boolean snapped = deltaYaw >= snapThreshold;
         if (snapped) {
             profile.recordFastTurn(deltaYaw, nowMs);
@@ -52,11 +55,11 @@ public final class MovementSimulationChecker {
         appendRotationSample(profile, nowMs, deltaYaw, deltaPitch, gcdYaw, gcdPitch, snapped);
 
         boolean elytraSafe = cfg.getBoolean("environment.elytra-safe-mode", true);
-        boolean recentKbOrImpact = (nowMs - profile.getLastKnockbackTimeMs()) < 1400L;
-        if (elytraSafe && (player.isGliding() || recentKbOrImpact)) {
+        boolean recentKbOrImpact = (nowMs - profile.getLastKnockbackTimeMs()) < 1800L;
+        if (elytraSafe && (player.isGliding() || recentKbOrImpact || player.getPing() > 140)) {
             profile.clearMitigation();
             profile.setHasSimulatedVy(false);
-            consecutiveHorizFlags.remove(player.getUniqueId());
+            horizWindows.remove(player.getUniqueId());
             return;
         }
 
@@ -71,42 +74,36 @@ public final class MovementSimulationChecker {
         double allowedHoriz = computeAllowedHorizontalSpeed(player, from, nowMs, profile);
         double horizOffset = horizDist - allowedHoriz;
 
-        double offsetThresh = cfg.getDouble("movement.horiz-offset-threshold", 0.16);
-        double severeThresh = cfg.getDouble("movement.horiz-severe-threshold", 0.38);
-        int minStreak = cfg.getInt("movement.min-consecutive-horiz-flags", 3);
-        double vlForPunish = cfg.getDouble("movement.horiz-vl-for-punish", 6.5);
+        double offsetThresh = cfg.getDouble("movement.horiz-offset-threshold", 0.42);
+        double severeThresh = cfg.getDouble("movement.horiz-severe-threshold", 0.72);
+        long windowMs = cfg.getLong("movement.min-sustained-window-ms", 1200L);
+        int minHits = cfg.getInt("movement.min-sustained-hits", 4);
+        double vlForPunish = cfg.getDouble("movement.horiz-vl-for-punish", 10.0);
 
         if (horizOffset > offsetThresh && !profile.isLagging()) {
-            int streak = consecutiveHorizFlags.merge(player.getUniqueId(), 1, Integer::sum);
-            if (streak >= minStreak) {
-                double vlAdd = Math.min(1.25, horizOffset * 1.8);
-                profile.addMathVl(vlAdd, nowMs);
-                if (horizOffset > severeThresh && profile.getMathVl() >= vlForPunish) {
-                    plugin.getPunishmentManager().evaluateAndPunish(
-                            player,
-                            profile,
-                            nowMs,
-                            "HorizontalOffset(" + String.format("%.3f", horizOffset) + ",streak=" + streak + ")"
-                    );
+            HorizWindow current = horizWindows.get(player.getUniqueId());
+            if (current == null || (nowMs - current.windowStartMs()) > windowMs) {
+                horizWindows.put(player.getUniqueId(), new HorizWindow(nowMs, 1));
+            } else {
+                int nextCount = current.count() + 1;
+                horizWindows.put(player.getUniqueId(), new HorizWindow(current.windowStartMs(), nextCount));
+
+                if (nextCount >= minHits && (nowMs - current.windowStartMs()) >= 400L) {
+                    double vlAdd = Math.min(1.40, horizOffset * 1.6);
+                    profile.addMathVl(vlAdd, nowMs);
+                    if (horizOffset > severeThresh && profile.getMathVl() >= vlForPunish) {
+                        plugin.getPunishmentManager().evaluateAndPunish(
+                                player,
+                                profile,
+                                nowMs,
+                                "HorizontalOffset(" + String.format("%.3f", horizOffset)
+                                        + ",hits=" + nextCount + ")"
+                        );
+                    }
                 }
             }
         } else {
-            consecutiveHorizFlags.remove(player.getUniqueId());
-        }
-
-        double dy = to.getY() - from.getY();
-        if (!player.isOnGround() && !isInClimbableOrFluid(from) && dy > 0.0) {
-            if (!profile.hasSimulatedVy()) {
-                profile.setLastSimulatedVy(dy);
-                profile.setHasSimulatedVy(true);
-            } else {
-                double expectedVy = (profile.getLastSimulatedVy() - 0.08) * 0.98;
-                double vertDiff = Math.abs(dy - expectedVy);
-                if (vertDiff > 0.36 && !profile.isLagging() && (nowMs - profile.getLastKnockbackTimeMs()) > 1200L) {
-                    profile.addMathVl(0.55, nowMs);
-                }
-                profile.setLastSimulatedVy(dy);
-            }
+            horizWindows.remove(player.getUniqueId());
         }
     }
 
@@ -119,26 +116,21 @@ public final class MovementSimulationChecker {
     }
 
     private double computeAllowedHorizontalSpeed(Player player, Location from, long nowMs, PlayerCheckProfile profile) {
-        double base = player.isOnGround() ? 0.39 : 0.49;
+        double base = player.isOnGround() ? 0.42 : 0.54;
         if (player.hasPotionEffect(PotionEffectType.SPEED)) {
             int amp = player.getPotionEffect(PotionEffectType.SPEED).getAmplifier() + 1;
-            base += amp * 0.095;
+            base += amp * 0.10;
         }
-        if ((nowMs - profile.getLastKnockbackTimeMs()) < 1400L) {
-            base += 0.60;
+        if ((nowMs - profile.getLastKnockbackTimeMs()) < 1800L) {
+            base += 0.70;
         }
         Material blockType = from.getBlock().getType();
         if (blockType == Material.COBWEB) {
-            base = 0.19;
+            base = 0.22;
         } else if (blockType == Material.ICE || blockType == Material.PACKED_ICE || blockType == Material.BLUE_ICE) {
-            base += 0.25;
+            base += 0.28;
         }
         return base;
-    }
-
-    private boolean isInClimbableOrFluid(Location loc) {
-        Material m = loc.getBlock().getType();
-        return m == Material.LADDER || m == Material.VINE || m == Material.WATER || m == Material.LAVA || m == Material.COBWEB;
     }
 
     private double computeGcd(double value) {
