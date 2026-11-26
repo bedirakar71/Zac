@@ -37,6 +37,9 @@ public final class PlayerCheckProfile {
     private long lastFakeCritMs;
     private int consecutiveFakeCrits;
 
+    private int consecutiveReachHits;
+    private long lastReachHitMs;
+
     private int decoyLockTicks;
     private double decoyLockScore;
     private boolean decoyFlagged;
@@ -143,6 +146,25 @@ public final class PlayerCheckProfile {
         this.lastFastTurnMs = nowMs;
     }
 
+    public int recordAndGetConsecutiveReach(long nowMs) {
+        if ((nowMs - this.lastReachHitMs) <= 4500L) {
+            this.consecutiveReachHits++;
+        } else {
+            this.consecutiveReachHits = 1;
+        }
+        this.lastReachHitMs = nowMs;
+        return this.consecutiveReachHits;
+    }
+
+    public void resetConsecutiveReach() {
+        this.consecutiveReachHits = 0;
+        this.lastReachHitMs = 0L;
+    }
+
+    public int getConsecutiveReachHits() {
+        return consecutiveReachHits;
+    }
+
     public long getLastKickTimeMs() {
         return lastKickTimeMs;
     }
@@ -223,7 +245,6 @@ public final class PlayerCheckProfile {
     }
 
     public void activateMitigation(long durationMs) {
-        // Bilerek bos: oyuncu hareketi/ekrani dondurulmaz
         this.mitigationUntilMs = 0L;
     }
 
@@ -232,7 +253,6 @@ public final class PlayerCheckProfile {
     }
 
     public void clearMitigation() {
-        // Bilerek bos: oyuncu hareketi/ekrani dondurulmaz
         this.mitigationUntilMs = 0L;
     }
 
@@ -250,6 +270,7 @@ public final class PlayerCheckProfile {
         lastKickTimeMs = 0L;
         lastDecayTimeMs = 0L;
         resetConsecutiveCrits();
+        resetConsecutiveReach();
         decoyLockTicks = 0;
         decoyLockScore = 0.0;
         decoyFlagged = false;
