@@ -52,22 +52,21 @@ public final class DecoyNpcManager {
             return false;
         }
 
-        // Oyuncu onunden gecerken yanlislikla vurduysa gormezden gel; takip/kilitlenme checkAimLockOnDecoy'da islenir
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        boolean ignorePassHit = cfg.getBoolean("decoy.ignore-accidental-pass-hit", true);
+        boolean ignorePassHit = cfg.getBoolean("decoy.ignore-accidental-pass-hit", false);
 
         ActiveDecoy ownerDecoy = activeByOwner.get(attacker.getUniqueId());
         if (ownerDecoy != null && ownerDecoy.decoyEntityId().equals(target.getUniqueId()) && !profile.isLagging()) {
-            if (!ignorePassHit || profile.getDecoyLockTicks() >= 4) {
+            if (!ignorePassHit || profile.getDecoyLockTicks() >= 2) {
                 int nextTicks = profile.getDecoyLockTicks() + 2;
                 profile.setDecoyLockTicks(nextTicks);
-                profile.setDecoyLockScore(Math.min(1.0, profile.getDecoyLockScore() + 0.25));
-                profile.addHeuristicVl(cfg.getDouble("decoy.vl-per-decoy-flag", 1.80) * 0.50, nowMs);
+                profile.setDecoyLockScore(Math.min(1.0, profile.getDecoyLockScore() + 0.30));
+                profile.addHeuristicVl(cfg.getDouble("decoy.vl-per-decoy-flag", 1.85) * 0.65, nowMs);
                 plugin.getPunishmentManager().evaluateAndPunish(
                         attacker,
                         profile,
                         nowMs,
-                        "DecoyLock(ticks=" + nextTicks + ")"
+                        "DecoyHit(ticks=" + nextTicks + ")"
                 );
             }
         }
@@ -86,8 +85,8 @@ public final class DecoyNpcManager {
             return;
         }
 
-        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 2.2);
-        double minScore = cfg.getDouble("decoy.auto-spawn-min-score", 0.28);
+        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 1.8);
+        double minScore = cfg.getDouble("decoy.auto-spawn-min-score", 0.25);
         boolean spawnOnSuspiciousHit = cfg.getBoolean("decoy.spawn-on-suspicious-hit", true);
 
         double totalVl = profile.getMathVl() + profile.getHeuristicVl();
@@ -106,7 +105,7 @@ public final class DecoyNpcManager {
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         double radius = cfg.getDouble("decoy.radius-blocks", 2.1);
-        long durationTicks = cfg.getLong("decoy.duration-ticks", 220L);
+        long durationTicks = cfg.getLong("decoy.duration-ticks", 240L);
         long durationMs = durationTicks * 50L;
 
         Location base = player.getLocation();
@@ -193,10 +192,10 @@ public final class DecoyNpcManager {
         }
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 11.5);
-        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 6);
-        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.50);
-        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.80);
+        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 12.5);
+        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 4);
+        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.40);
+        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.85);
 
         Location eyeLoc = toLoc.clone().add(0.0, player.getEyeHeight(), 0.0);
         Vector decoyCenter = stand.getLocation().clone().add(0.0, 1.0, 0.0).toVector();
@@ -232,8 +231,8 @@ public final class DecoyNpcManager {
             if (current > 0) {
                 profile.setDecoyLockTicks(current - 1);
             }
-            profile.setDecoyLockScore(Math.max(0.0, profile.getDecoyLockScore() - 0.10));
-            if (profile.getDecoyLockTicks() < 2) {
+            profile.setDecoyLockScore(Math.max(0.0, profile.getDecoyLockScore() - 0.08));
+            if (profile.getDecoyLockTicks() < 1) {
                 profile.setDecoyFlagged(false);
             }
         }
