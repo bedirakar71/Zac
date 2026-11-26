@@ -10,7 +10,6 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.util.Vector;
 
-import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -75,9 +74,7 @@ public final class DecoyNpcManager {
 
     public void tickActiveDecoys() {
         long now = System.currentTimeMillis();
-        Iterator> it = activeDecoys.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<UUID, ActiveDecoy> entry = it.next();
+        activeDecoys.entrySet().removeIf(entry -> {
             ActiveDecoy decoy = entry.getValue();
             Player player = Bukkit.getPlayer(decoy.playerId);
 
@@ -85,8 +82,7 @@ public final class DecoyNpcManager {
                 if (decoy.decoyEntity.isValid()) {
                     decoy.decoyEntity.remove();
                 }
-                it.remove();
-                continue;
+                return true;
             }
 
             decoy.angleRad += 0.25;
@@ -95,7 +91,8 @@ public final class DecoyNpcManager {
             double z = player.getLocation().getZ() + Math.sin(decoy.angleRad) * radius;
             double y = player.getLocation().getY();
             decoy.decoyEntity.teleport(new Location(player.getWorld(), x, y, z));
-        }
+            return false;
+        });
     }
 
     public void checkAimLockOnDecoy(Player player, PlayerCheckProfile profile, Location to, long nowMs) {
