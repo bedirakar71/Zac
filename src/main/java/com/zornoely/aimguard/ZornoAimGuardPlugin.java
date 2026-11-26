@@ -17,6 +17,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
@@ -77,7 +78,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
         Bukkit.getScheduler().runTaskTimer(this, () -> decoyManager.tickActiveDecoys(), 5L, 5L);
 
-        getLogger().info("ZornoAimGuard v2.1.0 baslatildi.");
+        getLogger().info("ZornoAimGuard v2.2.0 baslatildi.");
     }
 
     @Override
@@ -166,6 +167,32 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
     }
 
+    /**
+     * Duvara carpma / cevresel hasar veren diger pluginlerin hasarini engellemez;
+     * cevresel hasar sirasinda oyuncunun duvara carpma ivmesini guvenli sayar.
+     */
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onEnvironmentalDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Player player)) {
+            return;
+        }
+        if (event instanceof EntityDamageByEntityEvent) {
+            return;
+        }
+        EntityDamageEvent.DamageCause cause = event.getCause();
+        if (cause == EntityDamageEvent.DamageCause.FALL
+                || cause == EntityDamageEvent.DamageCause.FLY_INTO_WALL
+                || cause == EntityDamageEvent.DamageCause.CONTACT
+                || cause == EntityDamageEvent.DamageCause.CUSTOM) {
+            if (event.isCancelled()) {
+                event.setCancelled(false);
+            }
+            PlayerCheckProfile profile = getOrCreateProfile(player);
+            profile.setLastKnockbackTimeMs(System.currentTimeMillis());
+            profile.setHasSimulatedVy(false);
+        }
+    }
+
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (!sender.hasPermission("zornoaimguard.admin")) {
@@ -250,7 +277,6 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
 
         if (args[0].equalsIgnoreCase("reset")) {
-            // Sadece anlik VL/pencere verileri sifirlanir; kalici ban ve gecmis loglari asla silinmez
             profile.resetAll();
             decoyManager.removeDecoy(target.getUniqueId());
             sender.sendMessage(Component.text("§d[ZornoAimGuard] §f" + target.getName() + " anlik analiz verileri sifirlandi."));
