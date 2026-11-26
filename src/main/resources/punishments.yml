@@ -8,21 +8,24 @@ punishments:
   log-to-console: true
 
 combat:
-  # Guvenli PvP/BoxPvP esigi: lag disinda 3.25 blok ustu vuruslar iptal edilir
   max-reach-blocks: 3.25
   lag-extra-tolerance: 0.40
   vl-per-reach-cancel: 1.15
-  # Duvar / katı blok arkasindan vurmayi engelle
+  block-back-hits: true
+  max-attack-look-angle-deg: 78.0
+  vl-per-back-hit: 1.75
   block-wall-hits: true
   vl-per-wall-hit: 1.60
-  # Ag (cobweb) icinden veya ag icindeki hedefe hileli vurusu iptal et
   block-cobweb-hits: true
   vl-per-cobweb-hit: 1.25
+  # Her vurusta sahte kritik (Criticals hilesi) engeli
+  block-fake-criticals: true
+  vl-per-fake-crit: 1.45
 
 killaura-aimassist:
   enabled: true
-  min-hits-in-window: 5
-  max-aim-error-deg: 2.35
-  score-threshold: 0.68
-  vl-per-flag: 1.50
+  min-hits-in-window: 4
+  max-aim-error-deg: 2.50
+  score-threshold: 0.62
+  vl-per-flag: 1.65
   
