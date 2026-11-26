@@ -3,6 +3,7 @@ package com.zornoely.aimguard.punishment;
 import com.zornoely.aimguard.ZornoAimGuardPlugin;
 import com.zornoely.aimguard.profile.PlayerCheckProfile;
 import net.kyori.adventure.text.Component;
+import org.bukkit.BanList;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -15,6 +16,7 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -133,6 +135,23 @@ public final class PunishmentRecordManager {
         }
     }
 
+    public void logAlert(String message) {
+        appendPermanentLog("ALERT | " + message);
+        if (punishmentsConfig.getBoolean("punishments.log-to-console", true)) {
+            plugin.getLogger().info("[ALERT] " + message);
+        }
+        if (punishmentsConfig.getBoolean("punishments.notify-staff-in-chat", true)) {
+            Component staffMsg = Component.text("§d§lZornoAimGuard §8» §7" + message);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    if (p.hasPermission("zornoaimguard.admin")) {
+                        p.sendMessage(staffMsg);
+                    }
+                }
+            });
+        }
+    }
+
     public synchronized void appendPermanentLog(String line) {
         try (PrintWriter out = new PrintWriter(new FileWriter(historyLogFile, StandardCharsets.UTF_8, true))) {
             out.println("[" + Instant.now() + "] " + line);
@@ -161,6 +180,7 @@ public final class PunishmentRecordManager {
         return entry;
     }
 
+    @SuppressWarnings("deprecation")
     public boolean banPlayer(String playerName, UUID playerId, String reason, String source, long durationDays) {
         if (playerName == null || playerName.isBlank()) {
             return false;
@@ -169,38 +189,55 @@ public final class PunishmentRecordManager {
         long expiresAt = durationDays > 0
                 ? now + (durationDays * 24L * 60L * 60L * 1000L)
                 : -1L;
+        Date expiryDate = expiresAt > 0L ? new Date(expiresAt) : null;
 
         String cleanReason = (reason == null || reason.isBlank()) ? "Supheli hareket/aim davranisi" : reason;
         BanEntry entry = new BanEntry(playerName, playerId, cleanReason, source, now, expiresAt, true);
         bansByLowerName.put(playerName.toLowerCase(Locale.ROOT), entry);
         savePersistedData();
         appendPermanentLog("BAN_ADD | player=" + playerName + " | source=" + source + " | expires=" + expiresAt + " | reason=" + cleanReason);
+        plugin.getLogger().info("[BAN] " + playerName + " banlandi (" + source + "): " + cleanReason);
 
-        Player online = Bukkit.getPlayerExact(playerName);
-        if (online != null && online.isOnline()) {
-            Bukkit.getScheduler().runTask(plugin, () ->
-                    online.kick(Component.text("§c§lZornoAimGuard §8» §7Banlandiniz: §f" + cleanReason)));
-        }
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Bukkit.getBanList(BanList.Type.NAME).addBan(playerName, cleanReason, expiryDate, source);
+            Player online = Bukkit.getPlayerExact(playerName);
+            if (online != null && online.isOnline()) {
+                online.kick(Component.text("§c§lZornoAimGuard §8» §7Banlandiniz: §f" + cleanReason));
+            }
+        });
         return true;
     }
 
+    @SuppressWarnings("deprecation")
     public boolean unbanPlayer(String playerName, String source) {
         if (playerName == null || playerName.isBlank()) {
             return false;
         }
         String key = playerName.toLowerCase(Locale.ROOT);
         BanEntry current = bansByLowerName.get(key);
-        if (current == null || !current.active()) {
+        boolean wasInYamlActive = current != null && current.active();
+        boolean wasInBukkitBanList = Bukkit.getBanList(BanList.Type.NAME).isBanned(playerName);
+
+        if (!wasInYamlActive && !wasInBukkitBanList) {
             return false;
         }
-        // Kayit silinmez, active=false yapilarak kalici gecmiste tutulur
-        BanEntry updated = new BanEntry(
-                current.playerName(), current.playerId(), current.reason(), current.source(),
-                current.bannedAtMs(), current.expiresAtMs(), false
-        );
-        bansByLowerName.put(key, updated);
-        savePersistedData();
-        appendPermanentLog("BAN_REMOVE | player=" + current.playerName() + " | source=" + source);
+
+        if (current != null) {
+            BanEntry updated = new BanEntry(
+                    current.playerName(), current.playerId(), current.reason(), current.source(),
+                    current.bannedAtMs(), current.expiresAtMs(), false
+            );
+            bansByLowerName.put(key, updated);
+            savePersistedData();
+        }
+
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Bukkit.getBanList(BanList.Type.NAME).pardon(playerName);
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "minecraft:pardon " + playerName);
+        });
+
+        appendPermanentLog("BAN_REMOVE | player=" + playerName + " | source=" + source);
+        plugin.getLogger().info("[UNBAN] " + playerName + " bani kaldirildi (" + source + ").");
         return true;
     }
 
@@ -241,14 +278,14 @@ public final class PunishmentRecordManager {
         long banDays = punishmentsConfig.getLong("punishments.ban-duration-days", 7L);
 
         double totalVl = profile.getMathVl() + profile.getHeuristicVl();
+        logAlert(player.getName() + " -> " + reason + " | VL=" + String.format("%.2f", totalVl));
 
-        // Once Silent Mitigation ile haksiz avantaji sinirla
-        if (totalVl >= 3.5 || profile.getCombatCheatScore() >= 0.55 || profile.getDecoyLockScore() >= 0.55) {
+        if (totalVl >= 3.2 || profile.getCombatCheatScore() >= 0.50 || profile.getDecoyLockScore() >= 0.50) {
             profile.activateMitigation(7000L);
         }
 
-        boolean strongCrossCheck = profile.getCombatCheatScore() >= punishmentsConfig.getDouble("killaura.score-threshold", 0.72)
-                && (profile.getDecoyLockScore() >= 0.55 || profile.getRotationSamples().size() >= 36);
+        boolean strongCrossCheck = profile.getCombatCheatScore() >= punishmentsConfig.getDouble("killaura-aimassist.score-threshold", 0.68)
+                && (profile.getDecoyLockScore() >= 0.50 || profile.getRotationSamples().size() >= 32);
 
         int kicksSoFar = getKickCount(player.getName());
 
@@ -263,6 +300,7 @@ public final class PunishmentRecordManager {
             int newKickCount = incrementKickCount(player.getName());
             profile.setLastKickTimeMs(nowMs);
             appendPermanentLog("KICK | player=" + player.getName() + " | count=" + newKickCount + " | vl=" + String.format("%.2f", totalVl) + " | reason=" + reason);
+            plugin.getLogger().info("[KICK] " + player.getName() + " (" + newKickCount + "/" + maxKicks + "): " + reason);
 
             String kickMsg = "§c§lZornoAimGuard §8» §7Uyari/Kick (" + newKickCount + "/" + maxKicks + "): §f" + reason;
             Bukkit.getScheduler().runTask(plugin, () -> player.kick(Component.text(kickMsg)));
