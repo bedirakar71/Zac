@@ -7,25 +7,37 @@ punishments:
   notify-staff-in-chat: true
   log-to-console: true
 
+environment:
+  # Duvara carpinca can gitmemesi icin carpma/fall hasarini iptal et
+  block-wall-impact-damage: true
+  # Elytra PvP sirasinda knockback/hareket yuzunden haksiz dondurmayi onle
+  elytra-safe-mode: true
+
 combat:
-  max-reach-blocks: 3.25
-  lag-extra-tolerance: 0.40
+  max-reach-blocks: 3.30
+  lag-extra-tolerance: 0.45
   vl-per-reach-cancel: 1.15
+  # Arkasi donuk / hizli kafa cevirip vurma (FlickBackAura) engeli
   block-back-hits: true
-  max-attack-look-angle-deg: 78.0
-  vl-per-back-hit: 1.75
+  max-attack-look-angle-deg: 72.0
+  snap-turn-min-deg: 42.0
+  snap-window-ms: 400
+  vl-per-back-hit: 1.85
+  # Duvar / kati blok arkasindan vurmayi engelle
   block-wall-hits: true
   vl-per-wall-hit: 1.60
+  # Ag (cobweb) icinden veya ag icindeki hedefe hileli vurusu iptal et
   block-cobweb-hits: true
   vl-per-cobweb-hit: 1.25
-  # Her vurusta sahte kritik (Criticals hilesi) engeli
+  # Elytra/normal ziplamada false atmayacak sekilde sahte kritik engeli
   block-fake-criticals: true
-  vl-per-fake-crit: 1.45
+  min-fake-crit-streak: 5
+  vl-per-fake-crit: 1.35
 
 killaura-aimassist:
   enabled: true
   min-hits-in-window: 4
-  max-aim-error-deg: 2.50
-  score-threshold: 0.62
-  vl-per-flag: 1.65
+  max-aim-error-deg: 2.60
+  score-threshold: 0.60
+  vl-per-flag: 1.70
   
