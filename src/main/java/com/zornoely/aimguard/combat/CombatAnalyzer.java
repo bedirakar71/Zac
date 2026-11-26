@@ -20,7 +20,7 @@ import java.util.Deque;
 
 public final class CombatAnalyzer {
 
-    private static final long COMBAT_WINDOW_MS = 8000L;
+    private static final long COMBAT_WINDOW_MS = 7000L;
     private static final int ROTATION_WINDOW_SIZE = 64;
 
     private final ZornoAimGuardPlugin plugin;
@@ -68,21 +68,21 @@ public final class CombatAnalyzer {
         );
         double aimErrorDeg = computeAimAngleErrorDeg(attacker.getEyeLocation(), upperAimPoint);
 
-        // 1. Arkadan vurus veya ani flick + hedef kilitlenmesi / asiri sapma
+        // 1. Arkadan vurus veya ani flick + KillAura kilitlenmesi / sapmasi
         boolean blockBackHits = cfg.getBoolean("combat.block-back-hits", true);
-        double maxAttackLookAngle = cfg.getDouble("combat.max-attack-look-angle-deg", 95.0);
-        long snapWindowMs = cfg.getLong("combat.snap-window-ms", 280L);
-        double snapTurnMin = cfg.getDouble("combat.snap-turn-min-deg", 54.0);
+        double maxAttackLookAngle = cfg.getDouble("combat.max-attack-look-angle-deg", 92.0);
+        long snapWindowMs = cfg.getLong("combat.snap-window-ms", 300L);
+        double snapTurnMin = cfg.getDouble("combat.snap-turn-min-deg", 50.0);
         boolean recentFastTurn = (nowMs - profile.getLastFastTurnMs()) <= snapWindowMs
                 && profile.getLastFastTurnDeg() >= snapTurnMin;
         double effectiveMaxAngle = profile.isLagging() ? (maxAttackLookAngle + 25.0) : maxAttackLookAngle;
 
         boolean isBackHit = aimErrorDeg > effectiveMaxAngle;
-        boolean isSnapAuraHit = recentFastTurn && (aimErrorDeg <= 8.5 || aimErrorDeg > 42.0);
+        boolean isSnapAuraHit = recentFastTurn && (aimErrorDeg <= 9.5 || aimErrorDeg > 40.0);
 
         if (blockBackHits && (isBackHit || isSnapAuraHit) && !profile.isLagging()) {
             event.setCancelled(true);
-            profile.addHeuristicVl(cfg.getDouble("combat.vl-per-back-hit", 1.40), nowMs);
+            profile.addHeuristicVl(cfg.getDouble("combat.vl-per-back-hit", 1.55), nowMs);
             plugin.getPunishmentManager().evaluateAndPunish(
                     attacker,
                     profile,
@@ -93,7 +93,7 @@ public final class CombatAnalyzer {
             return;
         }
 
-        // 2. Sikilastirilmis Reach kontrolu (4 blok civarini engeller; ust uste cok reach yoksa banlamaz)
+        // 2. Reach kontrolu (4 blok civarini engeller; ust uste cok reach yoksa banlamaz)
         double baseMaxReach = cfg.getDouble("combat.max-reach-blocks", 3.15);
         double lagExtra = cfg.getDouble("combat.lag-extra-tolerance", 0.35);
         boolean recentKb = (nowMs - profile.getLastKnockbackTimeMs()) < 1200L;
@@ -107,8 +107,7 @@ public final class CombatAnalyzer {
             int minReachStreakForPunish = cfg.getInt("combat.min-consecutive-reach-for-ban", 7);
 
             if (!profile.isLagging()) {
-                // Tek/az sayida reach vurusunda dusuk VL ver; koklenmis ust uste reach'te cezaya git
-                double vlPerReach = cfg.getDouble("combat.vl-per-reach-cancel", 0.55);
+                double vlPerReach = cfg.getDouble("combat.vl-per-reach-cancel", 0.65);
                 double vlToAdd = (reachStreak >= minReachStreakForPunish) ? (vlPerReach * 2.2) : (vlPerReach * 0.45);
                 profile.addMathVl(vlToAdd, nowMs);
 
@@ -128,11 +127,11 @@ public final class CombatAnalyzer {
             profile.resetConsecutiveReach();
         }
 
-        // 3. Duvar arkasi vurus (WallHit) kontrolu
+        // 3. Duvar arkasi vurus kontrolu
         if (cfg.getBoolean("combat.block-wall-hits", true) && isBlockedByWall(attacker, box, hitboxSurfaceDist)) {
             event.setCancelled(true);
             if (!profile.isLagging()) {
-                profile.addMathVl(cfg.getDouble("combat.vl-per-wall-hit", 2.00), nowMs);
+                profile.addMathVl(cfg.getDouble("combat.vl-per-wall-hit", 2.10), nowMs);
                 plugin.getPunishmentManager().evaluateAndPunish(
                         attacker,
                         profile,
@@ -143,7 +142,7 @@ public final class CombatAnalyzer {
             return;
         }
 
-        // 4. Cobweb kontrolu (istege bagli)
+        // 4. Cobweb kontrolu
         if (cfg.getBoolean("combat.block-cobweb-hits", false)) {
             boolean attackerInWeb = isInCobweb(attacker.getBoundingBox(), attacker.getWorld());
             boolean targetInWeb = isInCobweb(box, livingTarget.getWorld());
@@ -160,7 +159,7 @@ public final class CombatAnalyzer {
             }
         }
 
-        // 5. Az acilmis / soft AimAssist & KillAura tespiti (temiz oyuncuyu koruyarak)
+        // 5. KillAura & AimAssist analizi (kilitlenme, vurus ritmi ve donus tutarliligi)
         boolean alignedStrafe = attacker.getVelocity().length() > 0.05;
 
         Deque<PlayerCheckProfile.HitSample> hits = profile.getHitSamples();
@@ -173,10 +172,10 @@ public final class CombatAnalyzer {
             return;
         }
 
-        int minHits = cfg.getInt("killaura-aimassist.min-hits-in-window", 4);
-        double maxAimErr = cfg.getDouble("killaura-aimassist.max-aim-error-deg", 3.20);
-        double scoreThreshold = cfg.getDouble("killaura-aimassist.score-threshold", 0.44);
-        double vlPerFlag = cfg.getDouble("killaura-aimassist.vl-per-flag", 2.20);
+        int minHits = cfg.getInt("killaura-aimassist.min-hits-in-window", 3);
+        double maxAimErr = cfg.getDouble("killaura-aimassist.max-aim-error-deg", 3.60);
+        double scoreThreshold = cfg.getDouble("killaura-aimassist.score-threshold", 0.38);
+        double vlPerFlag = cfg.getDouble("killaura-aimassist.vl-per-flag", 2.45);
 
         double aimConsistency = computeAimLockConsistency(hits, maxAimErr);
         double rotationPattern = evaluateRotationCheatPattern(profile.getRotationSamples(), recentFastTurn);
@@ -184,22 +183,21 @@ public final class CombatAnalyzer {
         double avgAimError = hits.stream().mapToDouble(PlayerCheckProfile.HitSample::aimErrorDeg).average().orElse(15.0);
         double cps = clicks.size() / (COMBAT_WINDOW_MS / 1000.0);
 
+        // KillAura'da hedefe hizli/sabit aci ve ritmik vurus (daha dar pencere: son 2200ms)
+        long recentBurstHits = hits.stream().filter(h -> (nowMs - h.timestampMs()) <= 2200L).count();
+
         double score = 0.0;
         if (hits.size() >= minHits) {
-            // Az acilmis aim assist: aci hatasi 3.2 deg altinda ve vuruslar arasi sapma dusukse
-            if (avgAimError <= maxAimErr && aimConsistency >= 0.52) {
-                score += 0.34;
+            if (avgAimError <= maxAimErr && aimConsistency >= 0.45) {
+                score += 0.32;
             }
-            // Hareket halinde hedefin ustunde tutarli kalma
-            if (avgAimError <= (maxAimErr * 0.85) && alignedStrafe && aimConsistency >= 0.45) {
+            if (recentBurstHits >= 3 && avgAimError <= (maxAimErr * 0.90)) {
+                score += 0.22;
+            }
+            if (cps > 8.0 && cpsStdDev < 13.0) {
                 score += 0.16;
             }
-            // Tutarli / mekanik tiklama araligi
-            if (cps > 10.5 && cpsStdDev < 10.5) {
-                score += 0.16;
-            }
-            // Soft assist / orantisal adim / sert donus deseni
-            score += rotationPattern * 0.36;
+            score += rotationPattern * 0.38;
         }
 
         profile.setCombatCheatScore(score);
@@ -212,13 +210,13 @@ public final class CombatAnalyzer {
                     nowMs,
                     "AimAssist/KillAura(score=" + String.format("%.2f", score)
                             + ",aim=" + String.format("%.1f", avgAimError)
-                            + ",cons=" + String.format("%.2f", aimConsistency) + ")"
+                            + ",burst=" + recentBurstHits + ")"
             );
         }
     }
 
     private double computeAimLockConsistency(Deque<PlayerCheckProfile.HitSample> hits, double maxAimErr) {
-        if (hits.size() < 4) {
+        if (hits.size() < 3) {
             return 0.0;
         }
         int tightHits = 0;
@@ -237,13 +235,13 @@ public final class CombatAnalyzer {
         double stdDev = Math.sqrt(sqDiff / hits.size());
         double tightRatio = (double) tightHits / hits.size();
 
-        double stabilityScore = Math.max(0.0, 1.0 - (stdDev / 4.2));
-        return Math.min(1.0, (tightRatio * 0.60) + (stabilityScore * 0.40));
+        double stabilityScore = Math.max(0.0, 1.0 - (stdDev / 4.5));
+        return Math.min(1.0, (tightRatio * 0.55) + (stabilityScore * 0.45));
     }
 
     private double evaluateRotationCheatPattern(Deque<PlayerCheckProfile.RotationSample> samples, boolean recentFastTurn) {
-        if (samples.size() < 14) {
-            return recentFastTurn ? 0.25 : 0.0;
+        if (samples.size() < 10) {
+            return recentFastTurn ? 0.28 : 0.0;
         }
 
         int count = 0;
@@ -256,12 +254,12 @@ public final class CombatAnalyzer {
                 break;
             }
             count++;
-            if (s.deltaYaw() > 0.15f && s.deltaYaw() < 5.0f) {
+            if (s.deltaYaw() > 0.12f && s.deltaYaw() < 5.5f) {
                 microAssistCount++;
             }
-            if (prevDeltaYaw != null && prevDeltaYaw > 0.25f && s.deltaYaw() > 0.12f) {
+            if (prevDeltaYaw != null && prevDeltaYaw > 0.20f && s.deltaYaw() > 0.10f) {
                 float ratio = s.deltaYaw() / prevDeltaYaw;
-                if (ratio > 0.28f && ratio < 0.78f) {
+                if (ratio > 0.25f && ratio < 0.82f) {
                     proportionalStepCount++;
                 }
             }
@@ -270,14 +268,14 @@ public final class CombatAnalyzer {
 
         double microRatio = (double) microAssistCount / count;
         double signal = 0.0;
-        if (microRatio > 0.64 && count >= 18) {
+        if (microRatio > 0.58 && count >= 14) {
             signal += 0.34;
         }
-        if (proportionalStepCount >= 5) {
+        if (proportionalStepCount >= 4) {
             signal += 0.42;
         }
         if (recentFastTurn) {
-            signal += 0.24;
+            signal += 0.26;
         }
         return Math.min(1.0, signal);
     }
@@ -354,7 +352,7 @@ public final class CombatAnalyzer {
     }
 
     private double computeClickIntervalStdDev(Deque<Long> clicks) {
-        if (clicks.size() < 4) {
+        if (clicks.size() < 3) {
             return 99.0;
         }
         Long[] arr = clicks.toArray(new Long[0]);
