@@ -1,30 +1,28 @@
 punishments:
-  # Oncelikli kademeli ceza: true ise belirli kick sayisina ulasinca ban atar
   escalate-kick-to-ban: true
-  # Kick atmak icin gereken toplam ihlal (VL) puani
   kick-at-vl: 7.5
-  # Ban atmak icin gereken toplam VL puani veya escalate sonrasi kick sayisi
   ban-at-vl: 12.0
   max-kicks-before-ban: 2
   ban-duration-days: 7
+  notify-staff-in-chat: true
+  log-to-console: true
 
-killaura:
-  enabled: true
-  # Sabit/duzgun fare hareketine (iyi oyuncu aim'i) tek basina ceza vermez
-  ignore-pure-rotation: true
-  # Combat penceresinde gereken minimum vurus sayisi
-  min-hits-in-window: 6
-  # Hedefe kilitlenme/aci hatasi esigi (derece)
-  max-aim-error-deg: 2.2
-  # Skor esigi (0.0 - 1.0)
-  score-threshold: 0.72
-  vl-per-flag: 1.5
+combat:
+  # Guvenli PvP/BoxPvP esigi: lag disinda 3.25 blok ustu vuruslar iptal edilir
+  max-reach-blocks: 3.25
+  lag-extra-tolerance: 0.40
+  vl-per-reach-cancel: 1.15
+  # Duvar / katı blok arkasindan vurmayi engelle
+  block-wall-hits: true
+  vl-per-wall-hit: 1.60
+  # Ag (cobweb) icinden veya ag icindeki hedefe hileli vurusu iptal et
+  block-cobweb-hits: true
+  vl-per-cobweb-hit: 1.25
 
-reach:
+killaura-aimassist:
   enabled: true
-  # Bu mesafeyi gecen vuruslar aninda iptal edilir (blok)
-  max-reach-blocks: 3.45
-  # Ping/TPS lag sirasinda eklenecek ek tolerans (blok)
-  lag-extra-tolerance: 0.55
-  # Vurus iptal edildiginde eklenecek VL
-  vl-per-cancel: 1.35
+  min-hits-in-window: 5
+  max-aim-error-deg: 2.35
+  score-threshold: 0.68
+  vl-per-flag: 1.50
+  
