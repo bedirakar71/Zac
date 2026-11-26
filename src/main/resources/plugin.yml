@@ -1,13 +1,14 @@
 name: ZornoAimGuard
-version: 2.0.0
+version: 2.1.0
 main: com.zornoely.aimguard.ZornoAimGuardPlugin
 api-version: '1.21'
 author: ZornoEly
 commands:
-  aimguard:
-    description: ZornoAimGuard yonetim ve analiz komutlari
-    usage: /<command> <stats|decoy|reset> <oyuncu>
+  zornoaimguard:
+    description: ZornoAimGuard ana yonetim ve ban komutlari
+    usage: /<command> <stats|decoy|reset|reload|ban> ...
     permission: zornoaimguard.admin
+    aliases: [aimguard]
 permissions:
   zornoaimguard.admin:
     description: ZornoAimGuard komutlarini kullanma yetkisi
@@ -15,3 +16,4 @@ permissions:
   zornoaimguard.bypass:
     description: Anti-cheat kontrollerinden muafiyet
     default: false
+    
