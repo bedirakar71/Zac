@@ -40,6 +40,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
     private final Map<UUID, PlayerCheckProfile> profiles = new ConcurrentHashMap<>();
     private final Set<UUID> testLogOnlyPlayers = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> manualBypassPlayers = ConcurrentHashMap.newKeySet();
     private final Map<UUID, FocusSession> focusByTarget = new ConcurrentHashMap<>();
 
     private PunishmentRecordManager punishmentManager;
@@ -76,7 +77,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
             double tps = Bukkit.getTPS()[0];
 
             for (Player player : Bukkit.getOnlinePlayers()) {
-                if (player.hasPermission("zornoaimguard.bypass")) {
+                if (isPlayerBypassed(player)) {
                     continue;
                 }
                 PlayerCheckProfile profile = getOrCreateProfile(player);
@@ -89,7 +90,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
 
         Bukkit.getScheduler().runTaskTimer(this, () -> decoyManager.tickActiveDecoys(), 5L, 5L);
 
-        getLogger().info("ZornoAimGuard v2.4.0 baslatildi.");
+        getLogger().info("ZornoAimGuard v2.4.1 baslatildi (OP otomatik bypass kapali).");
     }
 
     @Override
@@ -102,7 +103,20 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
         focusByTarget.clear();
         testLogOnlyPlayers.clear();
+        manualBypassPlayers.clear();
         profiles.clear();
+    }
+
+    public boolean isPlayerBypassed(Player player) {
+        if (player == null) {
+            return true;
+        }
+        if (manualBypassPlayers.contains(player.getUniqueId())) {
+            return true;
+        }
+        boolean permBypassAllowed = punishmentManager != null
+                && punishmentManager.getPunishmentsConfig().getBoolean("bypass.allow-permission-bypass", false);
+        return permBypassAllowed && player.hasPermission("zornoaimguard.bypass");
     }
 
     public PlayerCheckProfile getOrCreateProfile(Player player) {
@@ -125,10 +139,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         if (session == null) {
             return false;
         }
-        if (nowMs >= session.expiresAtMs()) {
-            return false;
-        }
-        return true;
+        return nowMs < session.expiresAtMs();
     }
 
     public void notifyFocusTelemetry(Player target, PlayerCheckProfile profile, String detail) {
@@ -137,7 +148,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         if (session == null || now >= session.expiresAtMs()) {
             return;
         }
-        if ((now - session.lastReportMs()) < 1500L) {
+        if ((now - session.lastReportMs()) < 900L) {
             return;
         }
         focusByTarget.put(target.getUniqueId(), new FocusSession(
@@ -229,13 +240,14 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
         focusByTarget.remove(id);
         testLogOnlyPlayers.remove(id);
+        manualBypassPlayers.remove(id);
         profiles.remove(id);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("zornoaimguard.bypass")) {
+        if (isPlayerBypassed(player)) {
             return;
         }
         PlayerCheckProfile profile = getOrCreateProfile(player);
@@ -252,7 +264,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         if (!(event.getDamager() instanceof Player attacker)) {
             return;
         }
-        if (attacker.hasPermission("zornoaimguard.bypass")) {
+        if (isPlayerBypassed(attacker)) {
             return;
         }
         PlayerCheckProfile profile = getOrCreateProfile(attacker);
@@ -305,7 +317,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
 
         if (args.length == 0) {
-            sender.sendMessage(Component.text("§d[ZornoAimGuard] §f/" + label + " <stats|decoy|reset|reload|ban|analiz|test>"));
+            sender.sendMessage(Component.text("§d[ZornoAimGuard] §f/" + label + " <stats|decoy|reset|reload|ban|analiz|test|bypass>"));
             return true;
         }
 
@@ -339,7 +351,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
             if (action.equals("kaldır") || action.equals("kaldir")) {
                 boolean removed = punishmentManager.unbanPlayer(targetName, sender.getName());
                 if (removed) {
-                    sender.sendMessage(Component.text("§d[ZornoAimGuard] §a" + targetName + " §fban durumu kaldirildi (gecmis kaydi silinmedi)."));
+                    sender.sendMessage(Component.text("§d[ZornoAimGuard] §a" + targetName + " §fban durumu kaldirildi."));
                 } else {
                     sender.sendMessage(Component.text("§c" + targetName + " icin aktif ban kaydi bulunamadi."));
                 }
@@ -347,6 +359,31 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
             }
 
             sender.sendMessage(Component.text("§cKullanim: /" + label + " ban <at|kaldır> <oyuncu> [sebep]"));
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("bypass")) {
+            if (args.length < 3) {
+                sender.sendMessage(Component.text("§cKullanim: /" + label + " bypass <ac|kapat> <oyuncu>"));
+                return true;
+            }
+            Player target = Bukkit.getPlayerExact(args[2]);
+            if (target == null) {
+                sender.sendMessage(Component.text("§cOyuncu aktif degil."));
+                return true;
+            }
+            String mode = args[1].toLowerCase(Locale.ROOT);
+            if (mode.equals("ac") || mode.equals("on")) {
+                manualBypassPlayers.add(target.getUniqueId());
+                sender.sendMessage(Component.text("§d[ZornoAimGuard] §a" + target.getName() + " §fiçin manuel bypass açıldı."));
+                return true;
+            }
+            if (mode.equals("kapat") || mode.equals("off")) {
+                manualBypassPlayers.remove(target.getUniqueId());
+                sender.sendMessage(Component.text("§d[ZornoAimGuard] §e" + target.getName() + " §fiçin manuel bypass kapatıldı."));
+                return true;
+            }
+            sender.sendMessage(Component.text("§cKullanim: /" + label + " bypass <ac|kapat> <oyuncu>"));
             return true;
         }
 
@@ -368,7 +405,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
             }
             if (mode.equals("kapat") || mode.equals("off")) {
                 testLogOnlyPlayers.remove(target.getUniqueId());
-                sender.sendMessage(Component.text("§d[ZornoAimGuard] §e" + target.getName() + " §fiçin TEST modu kapatıldı, normal ceza sistemi aktif."));
+                sender.sendMessage(Component.text("§d[ZornoAimGuard] §e" + target.getName() + " §fiçin TEST modu kapatıldı."));
                 return true;
             }
             sender.sendMessage(Component.text("§cKullanim: /" + label + " test <ac|kapat> <oyuncu>"));
@@ -437,7 +474,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
             sender.sendMessage(Component.text("§fKillAura Skoru: §c" + String.format("%.1f%%", profile.getCombatCheatScore() * 100.0)));
             sender.sendMessage(Component.text("§fDecoy Kilitlenme: §c" + String.format("%.1f%%", profile.getDecoyLockScore() * 100.0)));
             sender.sendMessage(Component.text("§fTest Modu: §b" + (isTestLogOnly(target.getUniqueId()) ? "ACIK (Log Only)" : "KAPALI")));
-            sender.sendMessage(Component.text("§fKick Sayisi: §6" + punishmentManager.getKickCount(target.getName())));
+            sender.sendMessage(Component.text("§fBypass: §b" + (isPlayerBypassed(target) ? "ACIK" : "KAPALI")));
             sender.sendMessage(Component.text("§fPing / Lag: §b" + target.getPing() + "ms §7(Lag=" + profile.isLagging() + ")"));
             return true;
         }
@@ -465,14 +502,14 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
 
         if (args.length == 1) {
-            return filterPrefix(List.of("stats", "decoy", "reset", "reload", "ban", "analiz", "test"), args[0]);
+            return filterPrefix(List.of("stats", "decoy", "reset", "reload", "ban", "analiz", "test", "bypass"), args[0]);
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("ban")) {
             return filterPrefix(List.of("at", "kaldır"), args[1]);
         }
 
-        if (args.length == 2 && args[0].equalsIgnoreCase("test")) {
+        if (args.length == 2 && (args[0].equalsIgnoreCase("test") || args[0].equalsIgnoreCase("bypass"))) {
             return filterPrefix(List.of("ac", "kapat"), args[1]);
         }
 
@@ -483,7 +520,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
             return filterPrefix(punishmentManager.getKnownPlayerNames(), args[1]);
         }
 
-        if (args.length == 3 && (args[0].equalsIgnoreCase("ban") || args[0].equalsIgnoreCase("test"))) {
+        if (args.length == 3 && (args[0].equalsIgnoreCase("ban") || args[0].equalsIgnoreCase("test") || args[0].equalsIgnoreCase("bypass"))) {
             return filterPrefix(punishmentManager.getKnownPlayerNames(), args[2]);
         }
 
@@ -500,4 +537,4 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, T
         }
         return out;
     }
-                }
+ }
