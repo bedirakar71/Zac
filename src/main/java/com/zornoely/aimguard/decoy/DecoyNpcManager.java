@@ -12,7 +12,9 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.util.Vector;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +31,7 @@ public final class DecoyNpcManager {
 
     private final ZornoAimGuardPlugin plugin;
     private final Map<UUID, ActiveDecoy> activeByOwner = new ConcurrentHashMap<>();
+    private final Map<UUID, Deque<Long>> decoyHitHistory = new ConcurrentHashMap<>();
 
     public DecoyNpcManager(ZornoAimGuardPlugin plugin) {
         this.plugin = plugin;
@@ -52,24 +55,38 @@ public final class DecoyNpcManager {
             return false;
         }
 
-        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        boolean ignorePassHit = cfg.getBoolean("decoy.ignore-accidental-pass-hit", false);
-
+        // Vurus her zaman iptal edilir ki yanlislikla denk gelse bile savas hasari/knockback bozulmasin
         ActiveDecoy ownerDecoy = activeByOwner.get(attacker.getUniqueId());
-        if (ownerDecoy != null && ownerDecoy.decoyEntityId().equals(target.getUniqueId()) && !profile.isLagging()) {
-            if (!ignorePassHit || profile.getDecoyLockTicks() >= 2) {
-                int nextTicks = profile.getDecoyLockTicks() + 2;
-                profile.setDecoyLockTicks(nextTicks);
-                profile.setDecoyLockScore(Math.min(1.0, profile.getDecoyLockScore() + 0.30));
-                profile.addHeuristicVl(cfg.getDouble("decoy.vl-per-decoy-flag", 1.85) * 0.65, nowMs);
-                plugin.getPunishmentManager().evaluateAndPunish(
-                        attacker,
-                        profile,
-                        nowMs,
-                        "DecoyHit(ticks=" + nextTicks + ")"
-                );
-            }
+        if (ownerDecoy == null || !ownerDecoy.decoyEntityId().equals(target.getUniqueId()) || profile.isLagging()) {
+            return true;
         }
+
+        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
+        boolean ignorePassHit = cfg.getBoolean("decoy.ignore-accidental-pass-hit", true);
+        int minHitsForFlag = cfg.getInt("decoy.min-decoy-hits-for-flag", 3);
+        long hitWindowMs = cfg.getLong("decoy.decoy-hit-window-ms", 1800L);
+
+        Deque<Long> hits = decoyHitHistory.computeIfAbsent(attacker.getUniqueId(), k -> new ArrayDeque<>());
+        hits.addLast(nowMs);
+        while (!hits.isEmpty() && (nowMs - hits.peekFirst()) > hitWindowMs) {
+            hits.pollFirst();
+        }
+
+        // Onunden gecerken 1-2 kez kazara vurulursa log atmadan yoksay
+        if (ignorePassHit && hits.size() < minHitsForFlag && profile.getDecoyLockTicks() < cfg.getInt("decoy.min-lock-ticks-for-score", 6)) {
+            return true;
+        }
+
+        int nextTicks = profile.getDecoyLockTicks() + 2;
+        profile.setDecoyLockTicks(nextTicks);
+        profile.setDecoyLockScore(Math.min(1.0, profile.getDecoyLockScore() + 0.30));
+        profile.addHeuristicVl(cfg.getDouble("decoy.vl-per-decoy-flag", 1.80) * 0.65, nowMs);
+        plugin.getPunishmentManager().evaluateAndPunish(
+                attacker,
+                profile,
+                nowMs,
+                "DecoyHit(hits=" + hits.size() + ",ticks=" + nextTicks + ")"
+        );
         return true;
     }
 
@@ -85,15 +102,15 @@ public final class DecoyNpcManager {
             return;
         }
 
-        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 1.8);
-        double minScore = cfg.getDouble("decoy.auto-spawn-min-score", 0.25);
+        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 2.0);
+        double minScore = cfg.getDouble("decoy.auto-spawn-min-score", 0.26);
         boolean spawnOnSuspiciousHit = cfg.getBoolean("decoy.spawn-on-suspicious-hit", true);
 
         double totalVl = profile.getMathVl() + profile.getHeuristicVl();
         boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 8000L;
         boolean recentSnap = spawnOnSuspiciousHit
                 && (nowMs - profile.getLastFastTurnMs()) <= 2000L
-                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 54.0);
+                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 50.0);
 
         if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap)) {
             spawnDecoyForPlayer(player, profile, nowMs);
@@ -131,6 +148,7 @@ public final class DecoyNpcManager {
         profile.setDecoyLockTicks(0);
         profile.setDecoyLockScore(0.0);
         profile.setDecoyFlagged(false);
+        decoyHitHistory.remove(player.getUniqueId());
 
         activeByOwner.put(player.getUniqueId(),
                 new ActiveDecoy(stand.getUniqueId(), player.getUniqueId(), nowMs, nowMs + durationMs, angle));
@@ -148,6 +166,7 @@ public final class DecoyNpcManager {
             if (now >= decoy.expiresAtMs()) {
                 removeEntityById(decoy.decoyEntityId());
                 activeByOwner.remove(ownerId);
+                decoyHitHistory.remove(ownerId);
                 continue;
             }
 
@@ -155,12 +174,14 @@ public final class DecoyNpcManager {
             if (owner == null || !owner.isOnline() || owner.isDead()) {
                 removeEntityById(decoy.decoyEntityId());
                 activeByOwner.remove(ownerId);
+                decoyHitHistory.remove(ownerId);
                 continue;
             }
 
             Entity entity = Bukkit.getEntity(decoy.decoyEntityId());
             if (!(entity instanceof ArmorStand stand) || !stand.isValid()) {
                 activeByOwner.remove(ownerId);
+                decoyHitHistory.remove(ownerId);
                 continue;
             }
 
@@ -192,10 +213,10 @@ public final class DecoyNpcManager {
         }
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 12.5);
-        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 4);
-        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.40);
-        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.85);
+        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 10.5);
+        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 6);
+        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.55);
+        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.80);
 
         Location eyeLoc = toLoc.clone().add(0.0, player.getEyeHeight(), 0.0);
         Vector decoyCenter = stand.getLocation().clone().add(0.0, 1.0, 0.0).toVector();
@@ -231,8 +252,8 @@ public final class DecoyNpcManager {
             if (current > 0) {
                 profile.setDecoyLockTicks(current - 1);
             }
-            profile.setDecoyLockScore(Math.max(0.0, profile.getDecoyLockScore() - 0.08));
-            if (profile.getDecoyLockTicks() < 1) {
+            profile.setDecoyLockScore(Math.max(0.0, profile.getDecoyLockScore() - 0.12));
+            if (profile.getDecoyLockTicks() < 2) {
                 profile.setDecoyFlagged(false);
             }
         }
@@ -240,6 +261,7 @@ public final class DecoyNpcManager {
 
     public void removeDecoy(UUID ownerPlayerId) {
         ActiveDecoy removed = activeByOwner.remove(ownerPlayerId);
+        decoyHitHistory.remove(ownerPlayerId);
         if (removed != null) {
             removeEntityById(removed.decoyEntityId());
         }
@@ -250,6 +272,7 @@ public final class DecoyNpcManager {
             removeEntityById(decoy.decoyEntityId());
         }
         activeByOwner.clear();
+        decoyHitHistory.clear();
     }
 
     private void removeEntityById(UUID id) {
