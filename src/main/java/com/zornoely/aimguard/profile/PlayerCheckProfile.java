@@ -6,6 +6,8 @@ import java.util.UUID;
 
 public final class PlayerCheckProfile {
 
+    public record HitSample(long timestampMs, double distance, double aimErrorDeg, boolean alignedStrafe) {}
+
     public record RotationSample(
             long timestampMs,
             float deltaYaw,
@@ -15,45 +17,29 @@ public final class PlayerCheckProfile {
             boolean snapped
     ) {}
 
-    public record HitSample(
-            long timestampMs,
-            double distance,
-            double aimErrorDeg,
-            boolean alignedStrafe
-    ) {}
-
     private final UUID playerId;
+
+    private final Deque<Long> clickTimestamps = new ArrayDeque<>();
+    private final Deque<HitSample> hitSamples = new ArrayDeque<>();
+    private final Deque<RotationSample> rotationSamples = new ArrayDeque<>();
 
     private double mathVl;
     private double heuristicVl;
+    private double combatCheatScore;
 
-    private long lastFlagTimeMs;
-    private long lastDecayTimeMs = System.currentTimeMillis();
     private long lastCombatTimeMs;
     private long lastKnockbackTimeMs;
-    private long lastKickTimeMs;
-    private long mitigationUntilMs;
-
-    private int lastPingMs;
-    private int pingDeltaMs;
-    private boolean lagging;
-    private long lastTransactionAckMs;
-
-    private final Deque<Long> clickTimestamps = new ArrayDeque<>();
-    private final Deque<RotationSample> rotationSamples = new ArrayDeque<>();
-    private final Deque<HitSample> hitSamples = new ArrayDeque<>();
-
-    private double combatCheatScore;
-    private double decoyLockScore;
-    private int decoyLockTicks;
-    private boolean decoyFlagged;
-
-    private int consecutiveCritHits;
-    private long lastCritHitMs;
     private long lastFastTurnMs;
     private float lastFastTurnDeg;
 
-    private double lastSimulatedVy;
+    private long lastFakeCritMs;
+    private int consecutiveFakeCrits;
+
+    private int decoyLockTicks;
+    private double decoyLockScore;
+    private boolean decoyFlagged;
+
+    private boolean lagging;
     private boolean hasSimulatedVy;
 
     public PlayerCheckProfile(UUID playerId) {
@@ -62,6 +48,18 @@ public final class PlayerCheckProfile {
 
     public UUID getPlayerId() {
         return playerId;
+    }
+
+    public Deque<Long> getClickTimestamps() {
+        return clickTimestamps;
+    }
+
+    public Deque<HitSample> getHitSamples() {
+        return hitSamples;
+    }
+
+    public Deque<RotationSample> getRotationSamples() {
+        return rotationSamples;
     }
 
     public double getMathVl() {
@@ -73,27 +71,33 @@ public final class PlayerCheckProfile {
     }
 
     public void addMathVl(double amount, long nowMs) {
-        this.mathVl = Math.max(0.0, this.mathVl + amount);
-        this.lastFlagTimeMs = nowMs;
+        if (amount <= 0.0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            return;
+        }
+        this.mathVl += amount;
+        this.lastCombatTimeMs = Math.max(this.lastCombatTimeMs, nowMs);
     }
 
     public void addHeuristicVl(double amount, long nowMs) {
-        this.heuristicVl = Math.max(0.0, this.heuristicVl + amount);
-        this.lastFlagTimeMs = nowMs;
+        if (amount <= 0.0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            return;
+        }
+        this.heuristicVl += amount;
+        this.lastCombatTimeMs = Math.max(this.lastCombatTimeMs, nowMs);
     }
 
-    public void decayVl(double mathDecay, double heuristicDecay, long nowMs) {
+    public void decayVl(double mathDecay, double heuristicDecay) {
         this.mathVl = Math.max(0.0, this.mathVl - mathDecay);
         this.heuristicVl = Math.max(0.0, this.heuristicVl - heuristicDecay);
-        this.lastDecayTimeMs = nowMs;
+        this.combatCheatScore = Math.max(0.0, this.combatCheatScore - 0.08);
     }
 
-    public long getLastFlagTimeMs() {
-        return lastFlagTimeMs;
+    public double getCombatCheatScore() {
+        return combatCheatScore;
     }
 
-    public long getLastDecayTimeMs() {
-        return lastDecayTimeMs;
+    public void setCombatCheatScore(double combatCheatScore) {
+        this.combatCheatScore = Math.max(0.0, Math.min(1.0, combatCheatScore));
     }
 
     public long getLastCombatTimeMs() {
@@ -112,81 +116,32 @@ public final class PlayerCheckProfile {
         this.lastKnockbackTimeMs = lastKnockbackTimeMs;
     }
 
-    public long getLastKickTimeMs() {
-        return lastKickTimeMs;
+    public long getLastFastTurnMs() {
+        return lastFastTurnMs;
     }
 
-    public void setLastKickTimeMs(long lastKickTimeMs) {
-        this.lastKickTimeMs = lastKickTimeMs;
+    public float getLastFastTurnDeg() {
+        return lastFastTurnDeg;
     }
 
-    public boolean isMitigating() {
-        return System.currentTimeMillis() < mitigationUntilMs;
+    public void recordFastTurn(float deg, long nowMs) {
+        this.lastFastTurnDeg = deg;
+        this.lastFastTurnMs = nowMs;
     }
 
-    public void activateMitigation(long durationMs) {
-        long until = System.currentTimeMillis() + durationMs;
-        if (until > this.mitigationUntilMs) {
-            this.mitigationUntilMs = until;
+    public int recordAndGetConsecutiveCrits(long nowMs) {
+        if ((nowMs - this.lastFakeCritMs) <= 650L) {
+            this.consecutiveFakeCrits++;
+        } else {
+            this.consecutiveFakeCrits = 1;
         }
+        this.lastFakeCritMs = nowMs;
+        return this.consecutiveFakeCrits;
     }
 
-    public void clearMitigation() {
-        this.mitigationUntilMs = 0L;
-    }
-
-    public int getLastPingMs() {
-        return lastPingMs;
-    }
-
-    public int getPingDeltaMs() {
-        return pingDeltaMs;
-    }
-
-    public void updatePing(int newPingMs, long ackTimestampMs) {
-        this.pingDeltaMs = Math.abs(newPingMs - this.lastPingMs);
-        this.lastPingMs = newPingMs;
-        this.lastTransactionAckMs = ackTimestampMs;
-    }
-
-    public long getLastTransactionAckMs() {
-        return lastTransactionAckMs;
-    }
-
-    public boolean isLagging() {
-        return lagging;
-    }
-
-    public void setLagging(boolean lagging) {
-        this.lagging = lagging;
-    }
-
-    public Deque<Long> getClickTimestamps() {
-        return clickTimestamps;
-    }
-
-    public Deque<RotationSample> getRotationSamples() {
-        return rotationSamples;
-    }
-
-    public Deque<HitSample> getHitSamples() {
-        return hitSamples;
-    }
-
-    public double getCombatCheatScore() {
-        return combatCheatScore;
-    }
-
-    public void setCombatCheatScore(double combatCheatScore) {
-        this.combatCheatScore = Math.max(0.0, Math.min(1.0, combatCheatScore));
-    }
-
-    public double getDecoyLockScore() {
-        return decoyLockScore;
-    }
-
-    public void setDecoyLockScore(double decoyLockScore) {
-        this.decoyLockScore = Math.max(0.0, Math.min(1.0, decoyLockScore));
+    public void resetConsecutiveCrits() {
+        this.consecutiveFakeCrits = 0;
+        this.lastFakeCritMs = 0L;
     }
 
     public int getDecoyLockTicks() {
@@ -197,6 +152,14 @@ public final class PlayerCheckProfile {
         this.decoyLockTicks = Math.max(0, decoyLockTicks);
     }
 
+    public double getDecoyLockScore() {
+        return decoyLockScore;
+    }
+
+    public void setDecoyLockScore(double decoyLockScore) {
+        this.decoyLockScore = Math.max(0.0, Math.min(1.0, decoyLockScore));
+    }
+
     public boolean isDecoyFlagged() {
         return decoyFlagged;
     }
@@ -205,39 +168,12 @@ public final class PlayerCheckProfile {
         this.decoyFlagged = decoyFlagged;
     }
 
-    public int recordAndGetConsecutiveCrits(long nowMs) {
-        if ((nowMs - lastCritHitMs) <= 1800L) {
-            consecutiveCritHits++;
-        } else {
-            consecutiveCritHits = 1;
-        }
-        lastCritHitMs = nowMs;
-        return consecutiveCritHits;
+    public boolean isLagging() {
+        return lagging;
     }
 
-    public void resetConsecutiveCrits() {
-        consecutiveCritHits = 0;
-    }
-
-    public void recordFastTurn(float deltaYawDeg, long nowMs) {
-        this.lastFastTurnDeg = deltaYawDeg;
-        this.lastFastTurnMs = nowMs;
-    }
-
-    public long getLastFastTurnMs() {
-        return lastFastTurnMs;
-    }
-
-    public float getLastFastTurnDeg() {
-        return lastFastTurnDeg;
-    }
-
-    public double getLastSimulatedVy() {
-        return lastSimulatedVy;
-    }
-
-    public void setLastSimulatedVy(double lastSimulatedVy) {
-        this.lastSimulatedVy = lastSimulatedVy;
+    public void setLagging(boolean lagging) {
+        this.lagging = lagging;
     }
 
     public boolean hasSimulatedVy() {
@@ -248,19 +184,26 @@ public final class PlayerCheckProfile {
         this.hasSimulatedVy = hasSimulatedVy;
     }
 
+    public void clearMitigation() {
+        // Bilerek bos: oyuncu hareketi/ekrani dondurulmaz
+    }
+
     public void resetAll() {
+        clickTimestamps.clear();
+        hitSamples.clear();
+        rotationSamples.clear();
         mathVl = 0.0;
         heuristicVl = 0.0;
         combatCheatScore = 0.0;
-        decoyLockScore = 0.0;
-        decoyLockTicks = 0;
-        decoyFlagged = false;
-        consecutiveCritHits = 0;
+        lastCombatTimeMs = 0L;
+        lastKnockbackTimeMs = 0L;
+        lastFastTurnMs = 0L;
         lastFastTurnDeg = 0.0f;
-        mitigationUntilMs = 0L;
-        clickTimestamps.clear();
-        rotationSamples.clear();
-        hitSamples.clear();
+        resetConsecutiveCrits();
+        decoyLockTicks = 0;
+        decoyLockScore = 0.0;
+        decoyFlagged = false;
+        lagging = false;
         hasSimulatedVy = false;
     }
 }
