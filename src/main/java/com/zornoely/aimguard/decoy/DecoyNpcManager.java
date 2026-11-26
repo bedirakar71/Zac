@@ -126,9 +126,13 @@ public final class DecoyNpcManager {
                 stand.teleport(targetLoc);
             }
 
-            entry = null;
-            activeByOwner.put(decoy.ownerPlayerId(),
-                    new ActiveDecoy(decoy.decoyEntityId(), decoy.ownerPlayerId(), decoy.spawnTimeMs(), decoy.expiresAtMs(), nextAngle));
+            entry.setValue(new ActiveDecoy(
+                    decoy.decoyEntityId(),
+                    decoy.ownerPlayerId(),
+                    decoy.spawnTimeMs(),
+                    decoy.expiresAtMs(),
+                    nextAngle
+            ));
         }
     }
 
@@ -168,7 +172,6 @@ public final class DecoyNpcManager {
             double normalized = Math.min(1.0, (double) ticks / Math.max(1, minLockTicks * 2));
             profile.setDecoyLockScore(normalized);
 
-            // Dondurma (mitigation) yapmadan sessizce skor ve belirli esikte VL biriktir
             if (ticks >= minLockTicks && normalized >= scoreThreshold && !profile.isDecoyFlagged()) {
                 profile.setDecoyFlagged(true);
                 profile.addHeuristicVl(vlPerFlag, nowMs);
