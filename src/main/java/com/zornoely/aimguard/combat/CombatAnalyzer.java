@@ -40,14 +40,12 @@ public final class CombatAnalyzer {
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         profile.setLastCombatTimeMs(nowMs);
 
-        // Tiklama gecmisi ve CPS/interval hesabi
         Deque<Long> clicks = profile.getClickTimestamps();
         clicks.addLast(nowMs);
         while (!clicks.isEmpty() && (nowMs - clicks.peekFirst()) > COMBAT_WINDOW_MS) {
             clicks.pollFirst();
         }
 
-        // Geri sarilmis konum + 3D Hitbox sinir mesafesi
         Location rewoundLoc = plugin.getLagManager().getRewoundLocation(target.getUniqueId(), attacker.getPing(), nowMs);
         Location compareLoc = (rewoundLoc != null) ? rewoundLoc : livingTarget.getLocation();
 
@@ -68,30 +66,33 @@ public final class CombatAnalyzer {
         );
         double aimErrorDeg = computeAimAngleErrorDeg(attacker.getEyeLocation(), upperAimPoint);
 
-        // 1. Arkasi donuk / yan bakis ile vurma (BackHit / KillAura) kontrolu
+        // 1. Arkasi donuk veya hizli kafa cevirip (flick/snap) vurma kontrolu
         boolean blockBackHits = cfg.getBoolean("combat.block-back-hits", true);
-        double maxAttackLookAngle = cfg.getDouble("combat.max-attack-look-angle-deg", 78.0);
+        double maxAttackLookAngle = cfg.getDouble("combat.max-attack-look-angle-deg", 72.0);
+        long snapWindowMs = cfg.getLong("combat.snap-window-ms", 400L);
+        boolean recentFastTurn = (nowMs - profile.getLastFastTurnMs()) <= snapWindowMs;
         double effectiveMaxAngle = profile.isLagging() ? (maxAttackLookAngle + 15.0) : maxAttackLookAngle;
 
-        if (blockBackHits && aimErrorDeg > effectiveMaxAngle) {
+        if (blockBackHits && (aimErrorDeg > effectiveMaxAngle || (recentFastTurn && aimErrorDeg > 18.0))) {
             event.setCancelled(true);
             if (!profile.isLagging()) {
-                profile.addHeuristicVl(cfg.getDouble("combat.vl-per-back-hit", 1.75), nowMs);
+                profile.addHeuristicVl(cfg.getDouble("combat.vl-per-back-hit", 1.85), nowMs);
                 plugin.getPunishmentManager().evaluateAndPunish(
                         attacker,
                         profile,
                         nowMs,
-                        "BackHitKillAura(angle=" + String.format("%.1f", aimErrorDeg) + "deg > " + String.format("%.1f", effectiveMaxAngle) + "deg)"
+                        "FlickBackAura(angle=" + String.format("%.1f", aimErrorDeg)
+                                + "deg,turn=" + String.format("%.1f", profile.getLastFastTurnDeg()) + "deg)"
                 );
             }
             return;
         }
 
-        // 2. Reach kontrolu: guvenli siniri gecen vurusu iptal et
-        double baseMaxReach = cfg.getDouble("combat.max-reach-blocks", 3.25);
-        double lagExtra = cfg.getDouble("combat.lag-extra-tolerance", 0.40);
-        boolean recentKb = (nowMs - profile.getLastKnockbackTimeMs()) < 900L;
-        double effectiveMaxReach = (profile.isLagging() || recentKb) ? (baseMaxReach + lagExtra) : baseMaxReach;
+        // 2. Reach kontrolu
+        double baseMaxReach = cfg.getDouble("combat.max-reach-blocks", 3.30);
+        double lagExtra = cfg.getDouble("combat.lag-extra-tolerance", 0.45);
+        boolean recentKb = (nowMs - profile.getLastKnockbackTimeMs()) < 1200L;
+        double effectiveMaxReach = (profile.isLagging() || recentKb || attacker.isGliding()) ? (baseMaxReach + lagExtra) : baseMaxReach;
 
         if (hitboxSurfaceDist > effectiveMaxReach) {
             event.setCancelled(true);
@@ -107,7 +108,7 @@ public final class CombatAnalyzer {
             return;
         }
 
-        // 3. Duvar / kati blok arkasindan vurma (WallHit) kontrolu
+        // 3. Duvar arkasi vurus (WallHit) kontrolu
         if (cfg.getBoolean("combat.block-wall-hits", true) && isBlockedByWall(attacker, box, hitboxSurfaceDist)) {
             event.setCancelled(true);
             if (!profile.isLagging()) {
@@ -122,11 +123,11 @@ public final class CombatAnalyzer {
             return;
         }
 
-        // 4. Ag (Cobweb) icinden veya ag icindeki hedefe vurus kontrolu
+        // 4. Ag (Cobweb) icinden veya ag icindeki hedefe hileli vurus kontrolu
         boolean attackerInWeb = isInCobweb(attacker.getBoundingBox(), attacker.getWorld());
         boolean targetInWeb = isInCobweb(box, livingTarget.getWorld());
         if (cfg.getBoolean("combat.block-cobweb-hits", true) && (attackerInWeb || targetInWeb)) {
-            if (hitboxSurfaceDist > 3.05 || profile.getMathVl() >= 2.0) {
+            if (hitboxSurfaceDist > 3.10 || profile.getMathVl() >= 2.5) {
                 event.setCancelled(true);
                 if (!profile.isLagging()) {
                     profile.addMathVl(cfg.getDouble("combat.vl-per-cobweb-hit", 1.25), nowMs);
@@ -141,20 +142,20 @@ public final class CombatAnalyzer {
             }
         }
 
-        // 5. Criticals (her vurusta kritik) kontrolu
-        if (cfg.getBoolean("combat.block-fake-criticals", true) && !profile.isLagging()) {
-            boolean looksLikeCrit = !attacker.isOnGround() && attacker.getFallDistance() > 0.0f;
-            if (looksLikeCrit) {
+        // 5. Sahte Criticals kontrolu (Elytra suzulme ve normal ziplamada false atmayacak sekilde)
+        if (cfg.getBoolean("combat.block-fake-criticals", true) && !profile.isLagging() && !attacker.isGliding()) {
+            boolean suspiciousCrit = attacker.isOnGround() && attacker.getFallDistance() <= 0.01f;
+            if (suspiciousCrit) {
                 int critStreak = profile.recordAndGetConsecutiveCrits(nowMs);
-                // Ardisik vuruslarda surekli kritik uretiliyorsa (Criticals hilesi) kritik bonusu kirilir
-                if (critStreak >= 3) {
-                    event.setDamage(event.getDamage() * 0.68);
-                    profile.addHeuristicVl(cfg.getDouble("combat.vl-per-fake-crit", 1.45), nowMs);
+                int minStreak = cfg.getInt("combat.min-fake-crit-streak", 5);
+                if (critStreak >= minStreak) {
+                    event.setDamage(event.getDamage() * 0.72);
+                    profile.addHeuristicVl(cfg.getDouble("combat.vl-per-fake-crit", 1.35), nowMs);
                     plugin.getPunishmentManager().evaluateAndPunish(
                             attacker,
                             profile,
                             nowMs,
-                            "Criticals(streak=" + critStreak + ",fall=" + String.format("%.2f", attacker.getFallDistance()) + ")"
+                            "FakeCriticals(streak=" + critStreak + ")"
                     );
                 }
             } else {
@@ -162,7 +163,7 @@ public final class CombatAnalyzer {
             }
         }
 
-        // 6. Gelismis AimAssist ve AttackAura analizi
+        // 6. Gelismis AimAssist ve KillAura analizi
         boolean alignedStrafe = attacker.getVelocity().length() > 0.06;
 
         Deque<PlayerCheckProfile.HitSample> hits = profile.getHitSamples();
@@ -176,9 +177,9 @@ public final class CombatAnalyzer {
         }
 
         int minHits = cfg.getInt("killaura-aimassist.min-hits-in-window", 4);
-        double maxAimErr = cfg.getDouble("killaura-aimassist.max-aim-error-deg", 2.50);
-        double scoreThreshold = cfg.getDouble("killaura-aimassist.score-threshold", 0.62);
-        double vlPerFlag = cfg.getDouble("killaura-aimassist.vl-per-flag", 1.65);
+        double maxAimErr = cfg.getDouble("killaura-aimassist.max-aim-error-deg", 2.60);
+        double scoreThreshold = cfg.getDouble("killaura-aimassist.score-threshold", 0.60);
+        double vlPerFlag = cfg.getDouble("killaura-aimassist.vl-per-flag", 1.70);
 
         double aimAssistSignal = evaluateAimAssistSmoothPattern(profile.getRotationSamples());
         double cpsStdDev = computeClickIntervalStdDev(clicks);
@@ -193,10 +194,10 @@ public final class CombatAnalyzer {
             if (avgAimError <= maxAimErr && alignedStrafe) {
                 score += 0.14;
             }
-            if (cps > 13.5 && cpsStdDev < 7.5) {
+            if (cps > 13.0 && cpsStdDev < 8.0) {
                 score += 0.22;
             }
-            score += aimAssistSignal * 0.42;
+            score += aimAssistSignal * 0.44;
         }
 
         profile.setCombatCheatScore(score);
