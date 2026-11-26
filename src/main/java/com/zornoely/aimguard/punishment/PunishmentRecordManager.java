@@ -272,7 +272,7 @@ public final class PunishmentRecordManager {
         if (player == null || !player.isOnline()) {
             return;
         }
-        if (player.hasPermission("zornoaimguard.bypass")) {
+        if (plugin.isPlayerBypassed(player)) {
             return;
         }
         if (profile.isLagging()) {
