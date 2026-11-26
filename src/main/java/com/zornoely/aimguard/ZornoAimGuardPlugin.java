@@ -6,28 +6,36 @@ import com.zornoely.aimguard.lag.LagCompensationManager;
 import com.zornoely.aimguard.mitigation.PunishmentEngine;
 import com.zornoely.aimguard.movement.MovementSimulationChecker;
 import com.zornoely.aimguard.profile.PlayerCheckProfile;
+import com.zornoely.aimguard.punishment.PunishmentRecordManager;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
+public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener, TabCompleter {
 
     private final Map<UUID, PlayerCheckProfile> profiles = new ConcurrentHashMap<>();
 
+    private PunishmentRecordManager punishmentManager;
     private LagCompensationManager lagManager;
     private MovementSimulationChecker movementChecker;
     private CombatAnalyzer combatAnalyzer;
@@ -36,6 +44,7 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
 
     @Override
     public void onEnable() {
+        this.punishmentManager = new PunishmentRecordManager(this);
         this.lagManager = new LagCompensationManager();
         this.movementChecker = new MovementSimulationChecker(this);
         this.combatAnalyzer = new CombatAnalyzer(this);
@@ -43,12 +52,14 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
         this.punishmentEngine = new PunishmentEngine(this);
 
         Bukkit.getPluginManager().registerEvents(this, this);
+        if (getCommand("zornoaimguard") != null) {
+            getCommand("zornoaimguard").setTabCompleter(this);
+        }
 
         for (Player online : Bukkit.getOnlinePlayers()) {
             profiles.put(online.getUniqueId(), new PlayerCheckProfile(online.getUniqueId()));
         }
 
-        // Her 20 tick (1 saniye): Ping/Lag kaydi, VL erimesi (decay) ve decoy/cross-check taramasi
         Bukkit.getScheduler().runTaskTimer(this, () -> {
             long now = System.currentTimeMillis();
             double tps = Bukkit.getTPS()[0];
@@ -64,10 +75,9 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
             }
         }, 20L, 20L);
 
-        // Her 5 tick: Aktif decoy NPC'lerin hareketini guncelle
         Bukkit.getScheduler().runTaskTimer(this, () -> decoyManager.tickActiveDecoys(), 5L, 5L);
 
-        getLogger().info("ZornoAimGuard v2.0.0 baslatildi.");
+        getLogger().info("ZornoAimGuard v2.1.0 baslatildi.");
     }
 
     @Override
@@ -82,6 +92,10 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
         return profiles.computeIfAbsent(player.getUniqueId(), PlayerCheckProfile::new);
     }
 
+    public PunishmentRecordManager getPunishmentManager() {
+        return punishmentManager;
+    }
+
     public LagCompensationManager getLagManager() {
         return lagManager;
     }
@@ -92,6 +106,17 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
 
     public DecoyNpcManager getDecoyManager() {
         return decoyManager;
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPreLogin(AsyncPlayerPreLoginEvent event) {
+        PunishmentRecordManager.BanEntry active = punishmentManager.getActiveBan(event.getName());
+        if (active != null) {
+            event.disallow(
+                    AsyncPlayerPreLoginEvent.Result.KICK_BANNED,
+                    Component.text("§c§lZornoAimGuard §8» §7Sunucudan banlandiniz.\n§7Sebep: §f" + active.reason())
+            );
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -135,20 +160,73 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
         PlayerCheckProfile profile = getOrCreateProfile(attacker);
         long now = System.currentTimeMillis();
 
-        combatAnalyzer.processHit(attacker, event.getEntity(), profile, now);
-        punishmentEngine.applyCombatMitigation(attacker, event.getEntity(), profile, event);
+        combatAnalyzer.processAttackEvent(attacker, event.getEntity(), profile, now, event);
+        if (!event.isCancelled()) {
+            punishmentEngine.applyCombatMitigation(attacker, event.getEntity(), profile, event);
+        }
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+        if (!sender.hasPermission("zornoaimguard.admin")) {
+            sender.sendMessage(Component.text("§cBu komut icin yetkin yok."));
+            return true;
+        }
+
+        if (args.length == 0) {
+            sender.sendMessage(Component.text("§d[ZornoAimGuard] §f/" + label + " <stats|decoy|reset|reload|ban>"));
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("reload")) {
+            punishmentManager.reloadConfigs();
+            sender.sendMessage(Component.text("§d[ZornoAimGuard] §apunishments.yml ve bans.yml yeniden yuklendi."));
+            return true;
+        }
+
+        if (args[0].equalsIgnoreCase("ban")) {
+            if (args.length < 3) {
+                sender.sendMessage(Component.text("§cKullanim: /" + label + " ban <at|kaldır> <oyuncu> [sebep]"));
+                return true;
+            }
+            String action = args[1].toLowerCase(Locale.ROOT);
+            String targetName = args[2];
+
+            if (action.equals("at")) {
+                String reason = args.length >= 4
+                        ? String.join(" ", Arrays.copyOfRange(args, 3, args.length))
+                        : "Yetkili tarafindan banlandi";
+                long days = punishmentManager.getPunishmentsConfig().getLong("punishments.ban-duration-days", 7L);
+                Player online = Bukkit.getPlayerExact(targetName);
+                UUID uuid = online != null ? online.getUniqueId() : null;
+
+                punishmentManager.banPlayer(targetName, uuid, reason, sender.getName(), days);
+                sender.sendMessage(Component.text("§d[ZornoAimGuard] §a" + targetName + " §fkalici kayitlara banlandi (§7" + reason + "§f)."));
+                return true;
+            }
+
+            if (action.equals("kaldır") || action.equals("kaldir")) {
+                boolean removed = punishmentManager.unbanPlayer(targetName, sender.getName());
+                if (removed) {
+                    sender.sendMessage(Component.text("§d[ZornoAimGuard] §a" + targetName + " §fban durumu kaldirildi (gecmis kaydi silinmedi)."));
+                } else {
+                    sender.sendMessage(Component.text("§c" + targetName + " icin aktif ban kaydi bulunamadi."));
+                }
+                return true;
+            }
+
+            sender.sendMessage(Component.text("§cKullanim: /" + label + " ban <at|kaldır> <oyuncu> [sebep]"));
+            return true;
+        }
+
         if (args.length < 2) {
-            sender.sendMessage(Component.text("§d[ZornoAimGuard] §fKullanim: /" + label + " <stats|decoy|reset> <oyuncu>"));
+            sender.sendMessage(Component.text("§cOyuncu adi gir: /" + label + " " + args[0] + " <oyuncu>"));
             return true;
         }
 
         Player target = Bukkit.getPlayerExact(args[1]);
         if (target == null) {
-            sender.sendMessage(Component.text("§cOyuncu bulunamadi."));
+            sender.sendMessage(Component.text("§cOyuncu aktif degil."));
             return true;
         }
 
@@ -156,12 +234,12 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
 
         if (args[0].equalsIgnoreCase("stats")) {
             sender.sendMessage(Component.text("§d=== ZornoAimGuard: " + target.getName() + " ==="));
-            sender.sendMessage(Component.text("§fMath/Packet VL: §e" + String.format("%.2f", profile.getMathVl())));
-            sender.sendMessage(Component.text("§fAim/Combat VL: §e" + String.format("%.2f", profile.getHeuristicVl())));
-            sender.sendMessage(Component.text("§fCombat Hile Skoru: §c" + String.format("%.1f%%", profile.getCombatCheatScore() * 100.0)));
-            sender.sendMessage(Component.text("§fDecoy Kilitlenme Skoru: §c" + String.format("%.1f%%", profile.getDecoyLockScore() * 100.0)));
-            sender.sendMessage(Component.text("§fPing / Lag: §b" + target.getPing() + "ms §7(LagSpike=" + profile.isLagging() + ")"));
-            sender.sendMessage(Component.text("§fMitigation Aktif: §d" + profile.isMitigating()));
+            sender.sendMessage(Component.text("§fMath/Reach VL: §e" + String.format("%.2f", profile.getMathVl())));
+            sender.sendMessage(Component.text("§fKillAura/Aim VL: §e" + String.format("%.2f", profile.getHeuristicVl())));
+            sender.sendMessage(Component.text("§fKillAura Skoru: §c" + String.format("%.1f%%", profile.getCombatCheatScore() * 100.0)));
+            sender.sendMessage(Component.text("§fDecoy Kilitlenme: §c" + String.format("%.1f%%", profile.getDecoyLockScore() * 100.0)));
+            sender.sendMessage(Component.text("§fKick Sayisi: §6" + punishmentManager.getKickCount(target.getName())));
+            sender.sendMessage(Component.text("§fPing / Lag: §b" + target.getPing() + "ms §7(Lag=" + profile.isLagging() + ")"));
             return true;
         }
 
@@ -172,12 +250,49 @@ public final class ZornoAimGuardPlugin extends JavaPlugin implements Listener {
         }
 
         if (args[0].equalsIgnoreCase("reset")) {
+            // Sadece anlik VL/pencere verileri sifirlanir; kalici ban ve gecmis loglari asla silinmez
             profile.resetAll();
             decoyManager.removeDecoy(target.getUniqueId());
-            sender.sendMessage(Component.text("§d[ZornoAimGuard] §f" + target.getName() + " verileri sifirlandi."));
+            sender.sendMessage(Component.text("§d[ZornoAimGuard] §f" + target.getName() + " anlik analiz verileri sifirlandi."));
             return true;
         }
 
         return false;
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] args) {
+        if (!sender.hasPermission("zornoaimguard.admin")) {
+            return List.of();
+        }
+
+        if (args.length == 1) {
+            return filterPrefix(List.of("stats", "decoy", "reset", "reload", "ban"), args[0]);
+        }
+
+        if (args.length == 2 && args[0].equalsIgnoreCase("ban")) {
+            return filterPrefix(List.of("at", "kaldır"), args[1]);
+        }
+
+        if (args.length == 2 && (args[0].equalsIgnoreCase("stats") || args[0].equalsIgnoreCase("decoy") || args[0].equalsIgnoreCase("reset"))) {
+            return filterPrefix(punishmentManager.getKnownPlayerNames(), args[1]);
+        }
+
+        if (args.length == 3 && args[0].equalsIgnoreCase("ban")) {
+            return filterPrefix(punishmentManager.getKnownPlayerNames(), args[2]);
+        }
+
+        return List.of();
+    }
+
+    private List<String> filterPrefix(List<String> candidates, String prefix) {
+        String lower = prefix.toLowerCase(Locale.ROOT);
+        List<String> out = new ArrayList<>();
+        for (String c : candidates) {
+            if (c.toLowerCase(Locale.ROOT).startsWith(lower)) {
+                out.add(c);
+            }
+        }
+        return out;
     }
 }
