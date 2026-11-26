@@ -5,18 +5,10 @@ import com.zornoely.aimguard.profile.PlayerCheckProfile;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.potion.PotionEffectType;
 
-import java.util.Deque;
-
 public final class MovementSimulationChecker {
-
-    private static final double GRAVITY = 0.08;
-    private static final double VERTICAL_DRAG = 0.9800000190734863;
-    private static final double MIN_VY = 0.003;
-    private static final double OFFSET_TOLERANCE = 0.0025;
 
     private final ZornoAimGuardPlugin plugin;
 
@@ -25,124 +17,119 @@ public final class MovementSimulationChecker {
     }
 
     public void checkMovement(Player player, PlayerCheckProfile profile, Location from, Location to, long nowMs) {
-        if (to == null || from == null || to.getWorld() == null || !from.getWorld().equals(to.getWorld())) {
+        if (from == null || to == null || from.getWorld() != to.getWorld()) {
+            return;
+        }
+        if (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR) {
+            return;
+        }
+        if (player.isGliding() || player.isInsideVehicle() || player.isFlying()) {
             return;
         }
 
-        analyzeRotation(player, profile, from, to, nowMs);
-
-        // Ozel hareket durumlarinda ve lag sirasinda false-positive engelleme
-        if (player.getGameMode() == GameMode.CREATIVE
-                || player.getGameMode() == GameMode.SPECTATOR
-                || player.isGliding()
-                || player.isSwimming()
-                || player.isRiptiding()
-                || player.isInsideVehicle()
-                || profile.isLagging()
-                || (nowMs - profile.getLastKnockbackTimeMs()) < 650L) {
-            profile.setHasSimulatedVy(false);
-            return;
+        // Rotation sample kaydi (64 ornek penceresi)
+        float deltaYaw = Math.abs(to.getYaw() - from.getYaw());
+        if (deltaYaw > 180.0f) {
+            deltaYaw = 360.0f - deltaYaw;
         }
+        float deltaPitch = Math.abs(to.getPitch() - from.getPitch());
+        double gcdYaw = computeGcd(deltaYaw);
+        double gcdPitch = computeGcd(deltaPitch);
+        boolean snapped = deltaYaw > 28.0f && deltaPitch < 1.5f;
 
-        double actualVy = to.getY() - from.getY();
-        boolean onGround = player.isOnGround();
+        DequeAdd(profile, nowMs, deltaYaw, deltaPitch, gcdYaw, gcdPitch, snapped);
 
-        if (!onGround && profile.hasSimulatedVy()) {
-            double predictedVy = (profile.getLastSimulatedVy() - GRAVITY) * VERTICAL_DRAG;
-            if (Math.abs(predictedVy) < MIN_VY) {
-                predictedVy = 0.0;
-            }
+        // Yatay hareket simülasyonu (HorizontalOffset + hız/etki/ağ toleransı)
+        double dx = to.getX() - from.getX();
+        double dz = to.getZ() - from.getZ();
+        double horizDist = Math.hypot(dx, dz);
 
-            double vyOffset = Math.abs(actualVy - predictedVy);
-            double jumpBonus = player.hasPotionEffect(PotionEffectType.JUMP_BOOST)
-                    ? (player.getPotionEffect(PotionEffectType.JUMP_BOOST).getAmplifier() + 1) * 0.22
-                    : 0.0;
+        double allowedHoriz = computeAllowedHorizontalSpeed(player, from, nowMs, profile);
+        double horizOffset = horizDist - allowedHoriz;
 
-            if (actualVy > predictedVy + OFFSET_TOLERANCE + jumpBonus && actualVy > 0.0) {
-                profile.addMathVl(1.15, nowMs);
-                plugin.getPunishmentEngine().evaluateCrossCheck(
+        if (horizOffset > 0.08 && !profile.isLagging()) {
+            double vlAdd = Math.min(2.2, horizOffset * 3.2);
+            profile.addMathVl(vlAdd, nowMs);
+            if (horizOffset > 0.28 && profile.getMathVl() >= 4.5) {
+                plugin.getPunishmentManager().evaluateAndPunish(
                         player,
                         profile,
                         nowMs,
-                        "VerticalOffset(" + String.format("%.4f", vyOffset) + ")"
+                        "HorizontalOffset(" + String.format("%.3f", horizOffset) + ")"
                 );
             }
         }
 
-        profile.setLastSimulatedVy(actualVy);
-        profile.setHasSimulatedVy(!onGround);
-
-        double dx = to.getX() - from.getX();
-        double dz = to.getZ() - from.getZ();
-        double horizontalDist = Math.hypot(dx, dz);
-        double maxAllowedHorizontal = computeMaxHorizontalSpeed(player, from);
-
-        if (horizontalDist > maxAllowedHorizontal + 0.035) {
-            profile.addMathVl(0.95, nowMs);
-            plugin.getPunishmentEngine().evaluateCrossCheck(
-                    player,
-                    profile,
-                    nowMs,
-                    "HorizontalOffset(" + String.format("%.3f", horizontalDist) + ")"
-            );
+        // Dikey / yerçekimi simülasyonu (VerticalOffset / AirStrafe / Step)
+        double dy = to.getY() - from.getY();
+        if (!player.isOnGround() && !isInClimbableOrFluid(from)) {
+            if (!profile.hasSimulatedVy()) {
+                profile.setLastSimulatedVy(dy);
+                profile.setHasSimulatedVy(true);
+            } else {
+                double expectedVy = (profile.getLastSimulatedVy() - 0.08) * 0.98;
+                double vertDiff = Math.abs(dy - expectedVy);
+                if (vertDiff > 0.24 && dy > -0.15 && !profile.isLagging() && (nowMs - profile.getLastKnockbackTimeMs()) > 800L) {
+                    profile.addMathVl(0.95, nowMs);
+                    if (profile.getMathVl() >= 6.0) {
+                        plugin.getPunishmentManager().evaluateAndPunish(
+                                player,
+                                profile,
+                                nowMs,
+                                "VerticalSim(diff=" + String.format("%.3f", vertDiff) + ")"
+                        );
+                    }
+                }
+                profile.setLastSimulatedVy(dy);
+            }
+        } else {
+            profile.setHasSimulatedVy(false);
         }
     }
 
-    private double computeMaxHorizontalSpeed(Player player, Location from) {
-        double base = player.isSprinting() ? 0.37 : 0.29;
-        if (player.hasPotionEffect(PotionEffectType.SPEED)) {
-            int amp = player.getPotionEffect(PotionEffectType.SPEED).getAmplifier() + 1;
-            base += amp * 0.08;
-        }
-        Block below = from.clone().subtract(0, 0.25, 0).getBlock();
-        Material type = below.getType();
-        if (type == Material.ICE || type == Material.PACKED_ICE || type == Material.BLUE_ICE) {
-            base *= 1.7;
-        } else if (type == Material.SOUL_SAND || type == Material.SOUL_SOIL) {
-            base *= 0.7;
-        }
-        return base;
-    }
-
-    private void analyzeRotation(Player player, PlayerCheckProfile profile, Location from, Location to, long nowMs) {
-        float deltaYaw = Math.abs(wrapAngle180(to.getYaw() - from.getYaw()));
-        float deltaPitch = Math.abs(to.getPitch() - from.getPitch());
-
-        if (deltaYaw < 0.02f && deltaPitch < 0.02f) {
-            return;
-        }
-
-        double gcdYaw = computeGcd(deltaYaw, 0.001);
-        double gcdPitch = computeGcd(deltaPitch, 0.001);
-
-        // Hizli flick yapan iyi oyunculari ayirmak icin tek seferlik snap degil, tekrarli durum olculur
-        boolean snapped = deltaYaw > 45.0f && deltaPitch > 15.0f;
-
-        Deque<PlayerCheckProfile.RotationSample> samples = profile.getRotationSamples();
+    private void DequeAdd(PlayerCheckProfile profile, long nowMs, float deltaYaw, float deltaPitch, double gcdYaw, double gcdPitch, boolean snapped) {
+        var samples = profile.getRotationSamples();
         samples.addLast(new PlayerCheckProfile.RotationSample(nowMs, deltaYaw, deltaPitch, gcdYaw, gcdPitch, snapped));
         while (samples.size() > 64) {
             samples.pollFirst();
         }
     }
 
-    private double computeGcd(double a, double b) {
-        if (b < 1e-7) {
-            return a;
+    private double computeAllowedHorizontalSpeed(Player player, Location from, long nowMs, PlayerCheckProfile profile) {
+        double base = player.isOnGround() ? 0.36 : 0.44;
+        if (player.hasPotionEffect(PotionEffectType.SPEED)) {
+            int amp = player.getPotionEffect(PotionEffectType.SPEED).getAmplifier() + 1;
+            base += amp * 0.085;
         }
-        int iterations = 0;
-        while (b > 1e-6 && iterations++ < 25) {
-            double temp = b;
-            b = a % b;
-            a = temp;
+        if ((nowMs - profile.getLastKnockbackTimeMs()) < 900L) {
+            base += 0.45;
         }
-        return a;
+        Material blockType = from.getBlock().getType();
+        if (blockType == Material.COBWEB) {
+            base = 0.16;
+        } else if (blockType == Material.ICE || blockType == Material.PACKED_ICE || blockType == Material.BLUE_ICE) {
+            base += 0.22;
+        }
+        return base;
     }
 
-    private float wrapAngle180(float angle) {
-        float wrapped = (angle + 180.0f) % 360.0f;
-        if (wrapped < 0) {
-            wrapped += 360.0f;
+    private boolean isInClimbableOrFluid(Location loc) {
+        Material m = loc.getBlock().getType();
+        return m == Material.LADDER || m == Material.VINE || m == Material.WATER || m == Material.LAVA || m == Material.COBWEB;
+    }
+
+    private double computeGcd(double value) {
+        if (value < 1e-5) {
+            return 0.0;
         }
-        return wrapped - 180.0f;
+        double a = value;
+        double b = 0.15;
+        int iter = 0;
+        while (b > 1e-6 && iter++ < 16) {
+            double temp = a % b;
+            a = b;
+            b = temp;
+        }
+        return a;
     }
 }
