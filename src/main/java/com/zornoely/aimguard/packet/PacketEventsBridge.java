@@ -8,11 +8,19 @@ import org.bukkit.entity.Player;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.Deque;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class PacketEventsBridge {
 
+    private record LastAngle(float yaw, float pitch, double prevDeltaYaw, double prevDeltaPitch) {}
+
+    private static final int MAX_ROTATION_SAMPLES = 64;
+
     private final ZornoAimGuardPlugin plugin;
+    private final Map<UUID, LastAngle> lastAngles = new ConcurrentHashMap<>();
     private boolean hooked;
 
     public PacketEventsBridge(ZornoAimGuardPlugin plugin) {
@@ -61,7 +69,12 @@ public final class PacketEventsBridge {
     }
 
     public void unhook() {
+        lastAngles.clear();
         hooked = false;
+    }
+
+    public void clearPlayer(UUID uuid) {
+        lastAngles.remove(uuid);
     }
 
     public boolean isHooked() {
@@ -103,7 +116,7 @@ public final class PacketEventsBridge {
             String packetName = packetTypeObj != null ? packetTypeObj.toString() : "";
 
             if (packetName.contains("ROTATION") || packetName.contains("POSITION_ROTATION") || packetName.contains("PLAYER_ROTATION")) {
-                extractAndRecordRotation(eventObj, profile, now);
+                extractAndRecordRotation(uuid, eventObj, profile, now);
             } else if (packetName.contains("INTERACT_ENTITY")) {
                 extractAndRecordInteract(uuid, eventObj, profile, now);
             }
@@ -111,26 +124,52 @@ public final class PacketEventsBridge {
         }
     }
 
-    private void extractAndRecordRotation(Object eventObj, PlayerCheckProfile profile, long now) {
+    private void extractAndRecordRotation(UUID uuid, Object eventObj, PlayerCheckProfile profile, long now) {
         try {
             Object wrapper = eventObj.getClass()
                     .getConstructor(eventObj.getClass())
                     .newInstance(eventObj);
 
             float yaw = readFloat(wrapper, "getYaw");
-            readFloat(wrapper, "getPitch");
+            float pitch = readFloat(wrapper, "getPitch");
 
-            var samples = profile.getRotationSamples();
-            if (!samples.isEmpty()) {
-                PlayerCheckProfile.RotationSample prev = samples.peekLast();
-                float dYaw = Math.abs(yaw - prev.deltaYaw());
-                if (dYaw > 180.0f) {
-                    dYaw = 360.0f - dYaw;
-                }
-                if (dYaw >= 50.0f) {
-                    profile.recordFastTurn(dYaw, now);
-                }
+            LastAngle prev = lastAngles.get(uuid);
+            if (prev == null) {
+                lastAngles.put(uuid, new LastAngle(yaw, pitch, 0.0, 0.0));
+                return;
             }
+
+            double deltaYaw = Math.abs(yaw - prev.yaw());
+            if (deltaYaw > 180.0) {
+                deltaYaw = 360.0 - deltaYaw;
+            }
+            double deltaPitch = Math.abs(pitch - prev.pitch());
+
+            double gcdYaw = computeGcd(deltaYaw, prev.prevDeltaYaw());
+            double gcdPitch = computeGcd(deltaPitch, prev.prevDeltaPitch());
+
+            double snapThreshold = plugin.getPunishmentManager().getPunishmentsConfig()
+                    .getDouble("combat.snap-turn-min-deg", 52.0);
+            boolean snapped = deltaYaw >= snapThreshold || deltaPitch >= (snapThreshold * 0.85);
+
+            if (snapped) {
+                profile.recordFastTurn((float) Math.max(deltaYaw, deltaPitch), now);
+            }
+
+            Deque<PlayerCheckProfile.RotationSample> samples = profile.getRotationSamples();
+            samples.addLast(new PlayerCheckProfile.RotationSample(
+                    now,
+                    (float) deltaYaw,
+                    (float) deltaPitch,
+                    gcdYaw,
+                    gcdPitch,
+                    snapped
+            ));
+            while (samples.size() > MAX_ROTATION_SAMPLES) {
+                samples.pollFirst();
+            }
+
+            lastAngles.put(uuid, new LastAngle(yaw, pitch, deltaYaw, deltaPitch));
         } catch (Throwable ignored) {
         }
     }
@@ -152,6 +191,24 @@ public final class PacketEventsBridge {
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    private double computeGcd(double current, double previous) {
+        double a = Math.abs(current);
+        double b = Math.abs(previous);
+        if (a < 1e-4) {
+            return b;
+        }
+        if (b < 1e-4) {
+            return a;
+        }
+        int guard = 0;
+        while (b > 1e-4 && guard++ < 16) {
+            double temp = a % b;
+            a = b;
+            b = temp;
+        }
+        return a;
     }
 
     private float readFloat(Object target, String methodName) {
