@@ -15,8 +15,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class PunishmentRecordManager {
 
@@ -33,6 +35,7 @@ public final class PunishmentRecordManager {
     private final ZornoAimGuardPlugin plugin;
     private final File punishmentsFile;
     private final File bansFile;
+    private final Map<UUID, Long> lastPunishmentByPlayer = new ConcurrentHashMap<>();
 
     private FileConfiguration punishmentsConfig;
     private FileConfiguration bansConfig;
@@ -304,7 +307,8 @@ public final class PunishmentRecordManager {
             return;
         }
 
-        if ((nowMs - profile.getLastPunishmentTimeMs()) < 2500L) {
+        long lastPunishmentMs = lastPunishmentByPlayer.getOrDefault(player.getUniqueId(), 0L);
+        if ((nowMs - lastPunishmentMs) < 2500L) {
             return;
         }
 
@@ -315,13 +319,13 @@ public final class PunishmentRecordManager {
         long banDays = punishmentsConfig.getLong("punishments.ban-duration-days", 7L);
 
         if (totalVl >= banAtVl) {
-            profile.setLastPunishmentTimeMs(nowMs);
+            lastPunishmentByPlayer.put(player.getUniqueId(), nowMs);
             banPlayer(player.getName(), player.getUniqueId(), "Hile tespiti (" + detail + ")", "ZornoAimGuard", banDays);
             return;
         }
 
         if (totalVl >= kickAtVl) {
-            profile.setLastPunishmentTimeMs(nowMs);
+            lastPunishmentByPlayer.put(player.getUniqueId(), nowMs);
             int kicks = recordKick(player, detail);
             if (escalate && kicks >= maxKicksBeforeBan) {
                 banPlayer(player.getName(), player.getUniqueId(), "Tekrarlanan hile tespiti (" + kicks + " kick)", "ZornoAimGuard", banDays);
