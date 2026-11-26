@@ -2,6 +2,7 @@ package com.zornoely.aimguard.combat;
 
 import com.zornoely.aimguard.ZornoAimGuardPlugin;
 import com.zornoely.aimguard.profile.PlayerCheckProfile;
+import org.bukkit.FluidCollisionMode;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -41,6 +42,7 @@ public final class CombatAnalyzer {
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         profile.setLastCombatTimeMs(nowMs);
+        boolean focused = plugin.isPlayerFocused(attacker.getUniqueId(), nowMs);
 
         Deque<Long> clicks = profile.getClickTimestamps();
         clicks.addLast(nowMs);
@@ -206,6 +208,14 @@ public final class CombatAnalyzer {
                             + ",aim=" + String.format("%.1f", avgAimError)
                             + ",burst=" + recentBurstHits + ")"
             );
+        } else if (focused && hits.size() >= 2) {
+            plugin.notifyFocusTelemetry(
+                    attacker,
+                    profile,
+                    "Hit(dist=" + String.format("%.2f", hitboxSurfaceDist)
+                            + "b,aim=" + String.format("%.1f", aimErrorDeg)
+                            + "deg,score=" + String.format("%.2f", score) + ")"
+            );
         }
     }
 
@@ -288,8 +298,33 @@ public final class CombatAnalyzer {
             return false;
         }
         Location eyeLoc = attacker.getEyeLocation();
+        World world = eyeLoc.getWorld();
+        if (world == null) {
+            return false;
+        }
+
+        double cx = targetBox.getCenterX();
+        double cz = targetBox.getCenterZ();
+        double minY = targetBox.getMinY();
+        double h = targetBox.getHeight();
+
+        // Ust blok kapali olsa bile alt/orta bosluktan vurulabilir oldugu icin coklu gorus hatti kontrol edilir
+        Vector[] targetPoints = new Vector[]{
+                new Vector(cx, minY + (h * 0.82), cz),
+                new Vector(cx, minY + (h * 0.50), cz),
+                new Vector(cx, minY + (h * 0.20), cz)
+        };
+
+        for (Vector pt : targetPoints) {
+            if (!isPointObstructed(world, eyeLoc, pt)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isPointObstructed(World world, Location eyeLoc, Vector targetPoint) {
         Vector origin = eyeLoc.toVector();
-        Vector targetPoint = targetBox.getCenter();
         Vector dir = targetPoint.clone().subtract(origin);
         double len = dir.length();
         if (len < 0.1) {
@@ -297,11 +332,11 @@ public final class CombatAnalyzer {
         }
         dir.normalize();
 
-        RayTraceResult blockHit = eyeLoc.getWorld().rayTraceBlocks(
+        RayTraceResult blockHit = world.rayTraceBlocks(
                 eyeLoc,
                 dir,
                 Math.min(len, 4.5),
-                org.bukkit.FluidCollisionMode.NEVER,
+                FluidCollisionMode.NEVER,
                 true
         );
         if (blockHit == null || blockHit.getHitBlock() == null) {
@@ -312,7 +347,7 @@ public final class CombatAnalyzer {
             return false;
         }
         double blockDist = blockHit.getHitPosition().distance(origin);
-        return blockDist + 0.18 < len;
+        return blockDist + 0.22 < len;
     }
 
     private boolean isInCobweb(BoundingBox box, World world) {
@@ -373,4 +408,4 @@ public final class CombatAnalyzer {
         }
         return Math.sqrt(sqSum / n);
     }
-                                    }
+}
