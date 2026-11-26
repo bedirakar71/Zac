@@ -1,7 +1,7 @@
 punishments:
   escalate-kick-to-ban: true
-  kick-at-vl: 10.0
-  ban-at-vl: 16.0
+  kick-at-vl: 9.5
+  ban-at-vl: 15.0
   max-kicks-before-ban: 2
   ban-duration-days: 7
   notify-staff-in-chat: true
@@ -15,17 +15,20 @@ environment:
 
 decoy:
   enabled: true
-  auto-spawn-min-vl: 1.8
-  auto-spawn-min-score: 0.25
+  auto-spawn-min-vl: 2.0
+  auto-spawn-min-score: 0.26
   spawn-on-suspicious-hit: true
   radius-blocks: 2.1
   duration-ticks: 240
-  ignore-accidental-pass-hit: false
-  lock-fov-deg: 12.5
+  # Onunden gecerken yanlislikla 1-2 kez vurmayi yoksay; sadece kilitlenip/tekrarlayarak vurursa say
+  ignore-accidental-pass-hit: true
+  min-decoy-hits-for-flag: 3
+  decoy-hit-window-ms: 1800
+  lock-fov-deg: 10.5
   freeze-on-decoy-lock: false
-  min-lock-ticks-for-score: 4
-  lock-score-threshold: 0.40
-  vl-per-decoy-flag: 1.85
+  min-lock-ticks-for-score: 6
+  lock-score-threshold: 0.55
+  vl-per-decoy-flag: 1.80
 
 movement:
   horiz-offset-threshold: 0.38
@@ -40,12 +43,12 @@ combat:
   vl-per-reach-cancel: 0.65
   min-consecutive-reach-for-ban: 7
   block-back-hits: true
-  max-attack-look-angle-deg: 95.0
-  snap-turn-min-deg: 54.0
-  snap-window-ms: 280
-  vl-per-back-hit: 1.45
+  max-attack-look-angle-deg: 92.0
+  snap-turn-min-deg: 50.0
+  snap-window-ms: 300
+  vl-per-back-hit: 1.55
   block-wall-hits: true
-  vl-per-wall-hit: 2.05
+  vl-per-wall-hit: 2.10
   block-cobweb-hits: false
   vl-per-cobweb-hit: 0.50
   block-fake-criticals: false
@@ -55,7 +58,7 @@ combat:
 killaura-aimassist:
   enabled: true
   min-hits-in-window: 3
-  max-aim-error-deg: 3.40
-  score-threshold: 0.40
-  vl-per-flag: 2.25
+  max-aim-error-deg: 3.60
+  score-threshold: 0.38
+  vl-per-flag: 2.45
   
