@@ -9,6 +9,8 @@ import org.bukkit.World;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.util.Vector;
 
@@ -26,7 +28,8 @@ public final class DecoyNpcManager {
             UUID ownerPlayerId,
             long spawnTimeMs,
             long expiresAtMs,
-            double angleRad
+            double angleRad,
+            boolean npcEntity
     ) {}
 
     private final ZornoAimGuardPlugin plugin;
@@ -55,7 +58,6 @@ public final class DecoyNpcManager {
             return false;
         }
 
-        // Yanlislikla denk gelen vurusun gercek savas hasari/knockback akisini bozmamasi icin her zaman iptal edilir
         ActiveDecoy ownerDecoy = activeByOwner.get(attacker.getUniqueId());
         if (ownerDecoy == null || !ownerDecoy.decoyEntityId().equals(target.getUniqueId()) || profile.isLagging()) {
             return true;
@@ -63,9 +65,9 @@ public final class DecoyNpcManager {
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         boolean ignorePassHit = cfg.getBoolean("decoy.ignore-accidental-pass-hit", true);
-        int minHitsForFlag = cfg.getInt("decoy.min-decoy-hits-for-flag", 3);
+        int minHitsForFlag = cfg.getInt("decoy.min-decoy-hits-for-flag", 2);
         long hitWindowMs = cfg.getLong("decoy.decoy-hit-window-ms", 1800L);
-        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 6);
+        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 5);
 
         Deque<Long> hits = decoyHitHistory.computeIfAbsent(attacker.getUniqueId(), k -> new ArrayDeque<>());
         hits.addLast(nowMs);
@@ -73,20 +75,19 @@ public final class DecoyNpcManager {
             hits.pollFirst();
         }
 
-        // Etrafinda donerken onunden gecerken 1-2 kez kazara vurulursa log atmadan yoksay
         if (ignorePassHit && hits.size() < minHitsForFlag && profile.getDecoyLockTicks() < minLockTicks) {
             return true;
         }
 
         int nextTicks = profile.getDecoyLockTicks() + 2;
         profile.setDecoyLockTicks(nextTicks);
-        profile.setDecoyLockScore(Math.min(1.0, profile.getDecoyLockScore() + 0.30));
-        profile.addHeuristicVl(cfg.getDouble("decoy.vl-per-decoy-flag", 1.80) * 0.65, nowMs);
+        profile.setDecoyLockScore(Math.min(1.0, profile.getDecoyLockScore() + 0.35));
+        profile.addHeuristicVl(cfg.getDouble("decoy.vl-per-decoy-flag", 1.80) * 0.70, nowMs);
         plugin.getPunishmentManager().evaluateAndPunish(
                 attacker,
                 profile,
                 nowMs,
-                "DecoyHit(hits=" + hits.size() + ",ticks=" + nextTicks + ")"
+                "DecoyHit(hits=" + hits.size() + ",ticks=" + nextTicks + ",npc=" + ownerDecoy.npcEntity() + ")"
         );
         return true;
     }
@@ -103,18 +104,21 @@ public final class DecoyNpcManager {
             return;
         }
 
-        double minVl = cfg.getDouble("decoy.auto-spawn-min-vl", 2.0);
-        double minScore = cfg.getDouble("decoy.auto-spawn-min-score", 0.26);
+        boolean focused = plugin.isPlayerFocused(player.getUniqueId(), nowMs);
+        double minVl = focused ? 1.0 : cfg.getDouble("decoy.auto-spawn-min-vl", 2.2);
+        double minScore = focused ? 0.16 : cfg.getDouble("decoy.auto-spawn-min-score", 0.28);
         boolean spawnOnSuspiciousHit = cfg.getBoolean("decoy.spawn-on-suspicious-hit", true);
 
         double totalVl = profile.getMathVl() + profile.getHeuristicVl();
         boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 8000L;
         boolean recentSnap = spawnOnSuspiciousHit
                 && (nowMs - profile.getLastFastTurnMs()) <= 2000L
-                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 50.0);
+                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 52.0);
 
-        if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap)) {
-            spawnDecoyForPlayer(player, profile, nowMs);
+        if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap || focused)) {
+            if (focused || totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap) {
+                spawnDecoyForPlayer(player, profile, nowMs);
+            }
         }
     }
 
@@ -125,6 +129,7 @@ public final class DecoyNpcManager {
         double radius = cfg.getDouble("decoy.radius-blocks", 2.1);
         long durationTicks = cfg.getLong("decoy.duration-ticks", 240L);
         long durationMs = durationTicks * 50L;
+        boolean preferVisibleNpc = cfg.getBoolean("decoy.prefer-visible-npc", true);
 
         Location base = player.getLocation();
         double angle = 0.0;
@@ -134,17 +139,27 @@ public final class DecoyNpcManager {
             return;
         }
 
-        ArmorStand stand = world.spawn(spawnLoc, ArmorStand.class, entity -> {
-            entity.setVisible(true);
-            entity.setGravity(false);
-            entity.setInvulnerable(true);
-            entity.setMarker(false);
-            entity.setSmall(false);
-            entity.setBasePlate(false);
-            entity.setArms(true);
-            entity.setCustomNameVisible(true);
-            entity.customName(Component.text("§8[§dDecoy§8]"));
-        });
+        Entity spawned = null;
+        boolean isNpc = false;
+
+        if (preferVisibleNpc) {
+            spawned = trySpawnNpcEntity(world, spawnLoc);
+            isNpc = spawned != null;
+        }
+
+        if (spawned == null) {
+            spawned = world.spawn(spawnLoc, ArmorStand.class, stand -> {
+                stand.setVisible(true);
+                stand.setGravity(false);
+                stand.setInvulnerable(true);
+                stand.setMarker(false);
+                stand.setSmall(false);
+                stand.setBasePlate(false);
+                stand.setArms(true);
+                stand.setCustomNameVisible(true);
+                stand.customName(Component.text("§8[§dDecoy§8]"));
+            });
+        }
 
         profile.setDecoyLockTicks(0);
         profile.setDecoyLockScore(0.0);
@@ -152,7 +167,40 @@ public final class DecoyNpcManager {
         decoyHitHistory.remove(player.getUniqueId());
 
         activeByOwner.put(player.getUniqueId(),
-                new ActiveDecoy(stand.getUniqueId(), player.getUniqueId(), nowMs, nowMs + durationMs, angle));
+                new ActiveDecoy(spawned.getUniqueId(), player.getUniqueId(), nowMs, nowMs + durationMs, angle, isNpc));
+    }
+
+    private Entity trySpawnNpcEntity(World world, Location spawnLoc) {
+        EntityType mannequinType = resolveEntityType("MANNEQUIN");
+        if (mannequinType != null) {
+            try {
+                Entity entity = world.spawnEntity(spawnLoc, mannequinType);
+                configureDecoyLivingEntity(entity);
+                return entity;
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    private void configureDecoyLivingEntity(Entity entity) {
+        entity.setGravity(false);
+        entity.setInvulnerable(true);
+        entity.setSilent(true);
+        entity.setCustomNameVisible(true);
+        entity.customName(Component.text("§8[§dDecoy§8]"));
+        if (entity instanceof LivingEntity living) {
+            living.setAI(false);
+            living.setCollidable(false);
+        }
+    }
+
+    private EntityType resolveEntityType(String name) {
+        try {
+            return EntityType.valueOf(name);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     public void tickActiveDecoys() {
@@ -180,7 +228,7 @@ public final class DecoyNpcManager {
             }
 
             Entity entity = Bukkit.getEntity(decoy.decoyEntityId());
-            if (!(entity instanceof ArmorStand stand) || !stand.isValid()) {
+            if (entity == null || !entity.isValid()) {
                 activeByOwner.remove(ownerId);
                 decoyHitHistory.remove(ownerId);
                 continue;
@@ -188,8 +236,8 @@ public final class DecoyNpcManager {
 
             double nextAngle = decoy.angleRad() + 0.40;
             Location targetLoc = computeOrbitLocation(owner.getLocation(), nextAngle, radius);
-            if (stand.getWorld() == targetLoc.getWorld()) {
-                stand.teleport(targetLoc);
+            if (entity.getWorld() == targetLoc.getWorld()) {
+                entity.teleport(targetLoc);
             }
 
             activeByOwner.put(ownerId, new ActiveDecoy(
@@ -197,7 +245,8 @@ public final class DecoyNpcManager {
                     decoy.ownerPlayerId(),
                     decoy.spawnTimeMs(),
                     decoy.expiresAtMs(),
-                    nextAngle
+                    nextAngle,
+                    decoy.npcEntity()
             ));
         }
     }
@@ -209,18 +258,18 @@ public final class DecoyNpcManager {
         }
 
         Entity entity = Bukkit.getEntity(decoy.decoyEntityId());
-        if (!(entity instanceof ArmorStand stand) || !stand.isValid() || stand.getWorld() != toLoc.getWorld()) {
+        if (entity == null || !entity.isValid() || entity.getWorld() != toLoc.getWorld()) {
             return;
         }
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
         double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 10.5);
-        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 6);
-        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.55);
+        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 5);
+        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.50);
         double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.80);
 
         Location eyeLoc = toLoc.clone().add(0.0, player.getEyeHeight(), 0.0);
-        Vector decoyCenter = stand.getLocation().clone().add(0.0, 1.0, 0.0).toVector();
+        Vector decoyCenter = entity.getLocation().clone().add(0.0, 1.0, 0.0).toVector();
         Vector toDecoy = decoyCenter.subtract(eyeLoc.toVector());
         if (toDecoy.lengthSquared() < 1e-6) {
             return;
@@ -245,7 +294,7 @@ public final class DecoyNpcManager {
                         player,
                         profile,
                         nowMs,
-                        "DecoyLock(ticks=" + ticks + ",angle=" + String.format("%.1f", angleDeg) + "deg)"
+                        "DecoyLock(ticks=" + ticks + ",angle=" + String.format("%.1f", angleDeg) + "deg,npc=" + decoy.npcEntity() + ")"
                 );
             }
         } else {
