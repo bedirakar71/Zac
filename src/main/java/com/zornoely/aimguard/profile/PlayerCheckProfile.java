@@ -31,6 +31,7 @@ public final class PlayerCheckProfile {
     private long lastDecayTimeMs = System.currentTimeMillis();
     private long lastCombatTimeMs;
     private long lastKnockbackTimeMs;
+    private long lastKickTimeMs;
     private long mitigationUntilMs;
 
     private int lastPingMs;
@@ -104,6 +105,14 @@ public final class PlayerCheckProfile {
 
     public void setLastKnockbackTimeMs(long lastKnockbackTimeMs) {
         this.lastKnockbackTimeMs = lastKnockbackTimeMs;
+    }
+
+    public long getLastKickTimeMs() {
+        return lastKickTimeMs;
+    }
+
+    public void setLastKickTimeMs(long lastKickTimeMs) {
+        this.lastKickTimeMs = lastKickTimeMs;
     }
 
     public boolean isMitigating() {
