@@ -7,19 +7,19 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Villager;
 import org.bukkit.util.Vector;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 
 public final class DecoyNpcManager {
 
@@ -28,13 +28,32 @@ public final class DecoyNpcManager {
             UUID ownerPlayerId,
             long spawnTimeMs,
             long expiresAtMs,
-            double angleRad,
-            boolean npcEntity
+            String slotName
     ) {}
+
+    private static final double[] RELATIVE_YAW_OFFSETS = {
+            180.0, // Tam arka
+            -90.0, // Tam sol
+            90.0,  // Tam sag
+            -135.0,// Sol arka capraz
+            135.0, // Sag arka capraz
+            -55.0, // Sol yan
+            55.0   // Sag yan
+    };
+
+    private static final String[] SLOT_NAMES = {
+            "ARKA",
+            "SOL",
+            "SAG",
+            "SOL-ARKA",
+            "SAG-ARKA",
+            "SOL-YAN",
+            "SAG-YAN"
+    };
 
     private final ZornoAimGuardPlugin plugin;
     private final Map<UUID, ActiveDecoy> activeByOwner = new ConcurrentHashMap<>();
-    private final Map<UUID, Deque<Long>> decoyHitHistory = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> lastSpawnByOwner = new ConcurrentHashMap<>();
 
     public DecoyNpcManager(ZornoAimGuardPlugin plugin) {
         this.plugin = plugin;
@@ -64,31 +83,21 @@ public final class DecoyNpcManager {
         }
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        boolean ignorePassHit = cfg.getBoolean("decoy.ignore-accidental-pass-hit", true);
-        int minHitsForFlag = cfg.getInt("decoy.min-decoy-hits-for-flag", 2);
-        long hitWindowMs = cfg.getLong("decoy.decoy-hit-window-ms", 1800L);
-        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 5);
+        double vlAdd = cfg.getDouble("decoy.vl-per-decoy-flag", 2.20);
 
-        Deque<Long> hits = decoyHitHistory.computeIfAbsent(attacker.getUniqueId(), k -> new ArrayDeque<>());
-        hits.addLast(nowMs);
-        while (!hits.isEmpty() && (nowMs - hits.peekFirst()) > hitWindowMs) {
-            hits.pollFirst();
-        }
+        profile.setDecoyLockTicks(profile.getDecoyLockTicks() + 3);
+        profile.setDecoyLockScore(1.0);
+        profile.addHeuristicVl(vlAdd, nowMs);
 
-        if (ignorePassHit && hits.size() < minHitsForFlag && profile.getDecoyLockTicks() < minLockTicks) {
-            return true;
-        }
-
-        int nextTicks = profile.getDecoyLockTicks() + 2;
-        profile.setDecoyLockTicks(nextTicks);
-        profile.setDecoyLockScore(Math.min(1.0, profile.getDecoyLockScore() + 0.35));
-        profile.addHeuristicVl(cfg.getDouble("decoy.vl-per-decoy-flag", 1.80) * 0.70, nowMs);
         plugin.getPunishmentManager().evaluateAndPunish(
                 attacker,
                 profile,
                 nowMs,
-                "DecoyHit(hits=" + hits.size() + ",ticks=" + nextTicks + ",npc=" + ownerDecoy.npcEntity() + ")"
+                "DecoyAuraHit(slot=" + ownerDecoy.slotName() + ",reactionMs=" + (nowMs - ownerDecoy.spawnTimeMs()) + ")"
         );
+
+        // Vurus alindiktan sonra NPC kisa surede kaybolur
+        removeDecoy(attacker.getUniqueId());
         return true;
     }
 
@@ -104,21 +113,27 @@ public final class DecoyNpcManager {
             return;
         }
 
+        long cooldownMs = cfg.getLong("decoy.respawn-cooldown-ms", 2400L);
+        long lastSpawn = lastSpawnByOwner.getOrDefault(player.getUniqueId(), 0L);
+        if ((nowMs - lastSpawn) < cooldownMs) {
+            return;
+        }
+
         boolean focused = plugin.isPlayerFocused(player.getUniqueId(), nowMs);
-        double minVl = focused ? 1.0 : cfg.getDouble("decoy.auto-spawn-min-vl", 2.2);
-        double minScore = focused ? 0.16 : cfg.getDouble("decoy.auto-spawn-min-score", 0.28);
+        boolean testOnly = plugin.isTestLogOnly(player.getUniqueId());
+
+        double minVl = (focused || testOnly) ? 0.5 : cfg.getDouble("decoy.auto-spawn-min-vl", 1.8);
+        double minScore = (focused || testOnly) ? 0.12 : cfg.getDouble("decoy.auto-spawn-min-score", 0.24);
         boolean spawnOnSuspiciousHit = cfg.getBoolean("decoy.spawn-on-suspicious-hit", true);
 
         double totalVl = profile.getMathVl() + profile.getHeuristicVl();
-        boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 8000L;
+        boolean recentCombat = (nowMs - profile.getLastCombatTimeMs()) <= 9000L;
         boolean recentSnap = spawnOnSuspiciousHit
-                && (nowMs - profile.getLastFastTurnMs()) <= 2000L
-                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 52.0);
+                && (nowMs - profile.getLastFastTurnMs()) <= 2500L
+                && profile.getLastFastTurnDeg() >= cfg.getDouble("combat.snap-turn-min-deg", 45.0);
 
-        if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap || focused)) {
-            if (focused || totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap) {
-                spawnDecoyForPlayer(player, profile, nowMs);
-            }
+        if (recentCombat && (totalVl >= minVl || profile.getCombatCheatScore() >= minScore || recentSnap || focused || testOnly)) {
+            spawnDecoyForPlayer(player, profile, nowMs);
         }
     }
 
@@ -126,72 +141,70 @@ public final class DecoyNpcManager {
         removeDecoy(player.getUniqueId());
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double radius = cfg.getDouble("decoy.radius-blocks", 2.1);
-        long durationTicks = cfg.getLong("decoy.duration-ticks", 240L);
-        long durationMs = durationTicks * 50L;
-        boolean preferVisibleNpc = cfg.getBoolean("decoy.prefer-visible-npc", true);
+        double distance = cfg.getDouble("decoy.spawn-distance-blocks", 2.45);
+        long visibleMs = cfg.getLong("decoy.visible-duration-ms", 1250L);
 
-        Location base = player.getLocation();
-        double angle = 0.0;
-        Location spawnLoc = computeOrbitLocation(base, angle, radius);
+        int idx = ThreadLocalRandom.current().nextInt(RELATIVE_YAW_OFFSETS.length);
+        double yawOffset = RELATIVE_YAW_OFFSETS[idx];
+        String slotName = SLOT_NAMES[idx];
+
+        Location spawnLoc = computeSpotLocation(player, yawOffset, distance);
         World world = spawnLoc.getWorld();
         if (world == null) {
             return;
         }
 
-        Entity spawned = null;
-        boolean isNpc = false;
-
-        if (preferVisibleNpc) {
-            spawned = trySpawnNpcEntity(world, spawnLoc);
-            isNpc = spawned != null;
+        // Oyuncuya dogru bakar sekilde yonlendir
+        Vector lookAtPlayer = player.getEyeLocation().toVector().subtract(spawnLoc.toVector().add(new Vector(0, 1.4, 0)));
+        if (lookAtPlayer.lengthSquared() > 1e-6) {
+            spawnLoc.setDirection(lookAtPlayer.normalize());
         }
 
+        Entity spawned = spawnNpcEntity(world, spawnLoc);
         if (spawned == null) {
-            spawned = world.spawn(spawnLoc, ArmorStand.class, stand -> {
-                stand.setVisible(true);
-                stand.setGravity(false);
-                stand.setInvulnerable(true);
-                stand.setMarker(false);
-                stand.setSmall(false);
-                stand.setBasePlate(false);
-                stand.setArms(true);
-                stand.setCustomNameVisible(true);
-                stand.customName(Component.text("§8[§dDecoy§8]"));
-            });
+            return;
         }
 
         profile.setDecoyLockTicks(0);
         profile.setDecoyLockScore(0.0);
         profile.setDecoyFlagged(false);
-        decoyHitHistory.remove(player.getUniqueId());
 
+        lastSpawnByOwner.put(player.getUniqueId(), nowMs);
         activeByOwner.put(player.getUniqueId(),
-                new ActiveDecoy(spawned.getUniqueId(), player.getUniqueId(), nowMs, nowMs + durationMs, angle, isNpc));
+                new ActiveDecoy(spawned.getUniqueId(), player.getUniqueId(), nowMs, nowMs + visibleMs, slotName));
     }
 
-    private Entity trySpawnNpcEntity(World world, Location spawnLoc) {
+    private Entity spawnNpcEntity(World world, Location spawnLoc) {
         EntityType mannequinType = resolveEntityType("MANNEQUIN");
         if (mannequinType != null) {
             try {
                 Entity entity = world.spawnEntity(spawnLoc, mannequinType);
-                configureDecoyLivingEntity(entity);
+                configureEntity(entity);
                 return entity;
             } catch (Throwable ignored) {
             }
         }
-        return null;
+
+        Villager villager = world.spawn(spawnLoc, Villager.class, v -> {
+            v.setProfession(Villager.Profession.NITWIT);
+            v.setVillagerType(Villager.Type.PLAINS);
+            v.setAge(0);
+            v.setAgeLock(true);
+        });
+        configureEntity(villager);
+        return villager;
     }
 
-    private void configureDecoyLivingEntity(Entity entity) {
+    private void configureEntity(Entity entity) {
         entity.setGravity(false);
         entity.setInvulnerable(true);
         entity.setSilent(true);
-        entity.setCustomNameVisible(true);
-        entity.customName(Component.text("§8[§dDecoy§8]"));
+        entity.setCustomNameVisible(false);
+        entity.customName(Component.empty());
         if (entity instanceof LivingEntity living) {
             living.setAI(false);
             living.setCollidable(false);
+            living.setRemoveWhenFarAway(true);
         }
     }
 
@@ -205,8 +218,6 @@ public final class DecoyNpcManager {
 
     public void tickActiveDecoys() {
         long now = System.currentTimeMillis();
-        FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double radius = cfg.getDouble("decoy.radius-blocks", 2.1);
 
         for (Map.Entry<UUID, ActiveDecoy> entry : new ArrayList<>(activeByOwner.entrySet())) {
             UUID ownerId = entry.getKey();
@@ -215,7 +226,6 @@ public final class DecoyNpcManager {
             if (now >= decoy.expiresAtMs()) {
                 removeEntityById(decoy.decoyEntityId());
                 activeByOwner.remove(ownerId);
-                decoyHitHistory.remove(ownerId);
                 continue;
             }
 
@@ -223,31 +233,14 @@ public final class DecoyNpcManager {
             if (owner == null || !owner.isOnline() || owner.isDead()) {
                 removeEntityById(decoy.decoyEntityId());
                 activeByOwner.remove(ownerId);
-                decoyHitHistory.remove(ownerId);
                 continue;
             }
 
             Entity entity = Bukkit.getEntity(decoy.decoyEntityId());
-            if (entity == null || !entity.isValid()) {
+            if (entity == null || !entity.isValid() || entity.getWorld() != owner.getWorld()) {
+                removeEntityById(decoy.decoyEntityId());
                 activeByOwner.remove(ownerId);
-                decoyHitHistory.remove(ownerId);
-                continue;
             }
-
-            double nextAngle = decoy.angleRad() + 0.40;
-            Location targetLoc = computeOrbitLocation(owner.getLocation(), nextAngle, radius);
-            if (entity.getWorld() == targetLoc.getWorld()) {
-                entity.teleport(targetLoc);
-            }
-
-            activeByOwner.put(ownerId, new ActiveDecoy(
-                    decoy.decoyEntityId(),
-                    decoy.ownerPlayerId(),
-                    decoy.spawnTimeMs(),
-                    decoy.expiresAtMs(),
-                    nextAngle,
-                    decoy.npcEntity()
-            ));
         }
     }
 
@@ -263,14 +256,18 @@ public final class DecoyNpcManager {
         }
 
         FileConfiguration cfg = plugin.getPunishmentManager().getPunishmentsConfig();
-        double lockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 10.5);
-        int minLockTicks = cfg.getInt("decoy.min-lock-ticks-for-score", 5);
-        double scoreThreshold = cfg.getDouble("decoy.lock-score-threshold", 0.50);
-        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 1.80);
+        double instantLockFovDeg = cfg.getDouble("decoy.lock-fov-deg", 8.5);
+        long minReactionMs = cfg.getLong("decoy.min-lock-reaction-ms", 60L);
+        double vlPerFlag = cfg.getDouble("decoy.vl-per-decoy-flag", 2.20);
+
+        long elapsedMs = nowMs - decoy.spawnTimeMs();
+        if (elapsedMs < minReactionMs) {
+            return;
+        }
 
         Location eyeLoc = toLoc.clone().add(0.0, player.getEyeHeight(), 0.0);
-        Vector decoyCenter = entity.getLocation().clone().add(0.0, 1.0, 0.0).toVector();
-        Vector toDecoy = decoyCenter.subtract(eyeLoc.toVector());
+        Vector targetCenter = entity.getLocation().clone().add(0.0, 1.35, 0.0).toVector();
+        Vector toDecoy = targetCenter.subtract(eyeLoc.toVector());
         if (toDecoy.lengthSquared() < 1e-6) {
             return;
         }
@@ -280,38 +277,25 @@ public final class DecoyNpcManager {
         double dot = Math.max(-1.0, Math.min(1.0, lookDir.dot(toDecoy)));
         double angleDeg = Math.toDegrees(Math.acos(dot));
 
-        if (angleDeg <= lockFovDeg) {
-            int ticks = profile.getDecoyLockTicks() + 1;
-            profile.setDecoyLockTicks(ticks);
+        if (angleDeg <= instantLockFovDeg && !profile.isDecoyFlagged()) {
+            profile.setDecoyFlagged(true);
+            profile.setDecoyLockTicks(profile.getDecoyLockTicks() + 1);
+            profile.setDecoyLockScore(1.0);
+            profile.addHeuristicVl(vlPerFlag, nowMs);
 
-            double normalized = Math.min(1.0, (double) ticks / Math.max(1, minLockTicks));
-            profile.setDecoyLockScore(normalized);
-
-            if (ticks >= minLockTicks && normalized >= scoreThreshold && !profile.isDecoyFlagged()) {
-                profile.setDecoyFlagged(true);
-                profile.addHeuristicVl(vlPerFlag, nowMs);
-                plugin.getPunishmentManager().evaluateAndPunish(
-                        player,
-                        profile,
-                        nowMs,
-                        "DecoyLock(ticks=" + ticks + ",angle=" + String.format("%.1f", angleDeg) + "deg,npc=" + decoy.npcEntity() + ")"
-                );
-            }
-        } else {
-            int current = profile.getDecoyLockTicks();
-            if (current > 0) {
-                profile.setDecoyLockTicks(current - 1);
-            }
-            profile.setDecoyLockScore(Math.max(0.0, profile.getDecoyLockScore() - 0.12));
-            if (profile.getDecoyLockTicks() < 2) {
-                profile.setDecoyFlagged(false);
-            }
+            plugin.getPunishmentManager().evaluateAndPunish(
+                    player,
+                    profile,
+                    nowMs,
+                    "DecoyInstantLock(slot=" + decoy.slotName()
+                            + ",angle=" + String.format("%.1f", angleDeg) + "deg"
+                            + ",ms=" + elapsedMs + ")"
+            );
         }
     }
 
     public void removeDecoy(UUID ownerPlayerId) {
         ActiveDecoy removed = activeByOwner.remove(ownerPlayerId);
-        decoyHitHistory.remove(ownerPlayerId);
         if (removed != null) {
             removeEntityById(removed.decoyEntityId());
         }
@@ -322,7 +306,7 @@ public final class DecoyNpcManager {
             removeEntityById(decoy.decoyEntityId());
         }
         activeByOwner.clear();
-        decoyHitHistory.clear();
+        lastSpawnByOwner.clear();
     }
 
     private void removeEntityById(UUID id) {
@@ -332,10 +316,25 @@ public final class DecoyNpcManager {
         }
     }
 
-    private Location computeOrbitLocation(Location center, double angleRad, double radius) {
-        double x = center.getX() + Math.cos(angleRad) * radius;
-        double y = center.getY() + 0.15;
-        double z = center.getZ() + Math.sin(angleRad) * radius;
-        return new Location(center.getWorld(), x, y, z);
+    private Location computeSpotLocation(Player player, double yawOffsetDeg, double distance) {
+        Location base = player.getLocation();
+        double rad = Math.toRadians(base.getYaw() + yawOffsetDeg);
+        // Minecraft yaw: -sin(yaw), cos(yaw) yatay ileri yonudur
+        double dirX = -Math.sin(rad);
+        double dirZ = Math.cos(rad);
+
+        double x = base.getX() + (dirX * distance);
+        double z = base.getZ() + (dirZ * distance);
+        double y = base.getY();
+
+        World world = base.getWorld();
+        if (world != null) {
+            Location candidate = new Location(world, x, y, z);
+            if (!candidate.getBlock().isPassable() || !candidate.clone().add(0, 1, 0).getBlock().isPassable()) {
+                return base.clone();
+            }
+            return candidate;
+        }
+        return new Location(world, x, y, z);
     }
 }
