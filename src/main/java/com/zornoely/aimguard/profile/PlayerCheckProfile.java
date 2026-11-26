@@ -48,6 +48,9 @@ public final class PlayerCheckProfile {
     private int decoyLockTicks;
     private boolean decoyFlagged;
 
+    private int consecutiveCritHits;
+    private long lastCritHitMs;
+
     private double lastSimulatedVy;
     private boolean hasSimulatedVy;
 
@@ -196,6 +199,20 @@ public final class PlayerCheckProfile {
         this.decoyFlagged = decoyFlagged;
     }
 
+    public int recordAndGetConsecutiveCrits(long nowMs) {
+        if ((nowMs - lastCritHitMs) <= 2200L) {
+            consecutiveCritHits++;
+        } else {
+            consecutiveCritHits = 1;
+        }
+        lastCritHitMs = nowMs;
+        return consecutiveCritHits;
+    }
+
+    public void resetConsecutiveCrits() {
+        consecutiveCritHits = 0;
+    }
+
     public double getLastSimulatedVy() {
         return lastSimulatedVy;
     }
@@ -219,6 +236,7 @@ public final class PlayerCheckProfile {
         decoyLockScore = 0.0;
         decoyLockTicks = 0;
         decoyFlagged = false;
+        consecutiveCritHits = 0;
         mitigationUntilMs = 0L;
         clickTimestamps.clear();
         rotationSamples.clear();
