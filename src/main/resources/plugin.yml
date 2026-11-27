@@ -1,0 +1,24 @@
+name: ZornoAimGuard
+version: 3.0.0
+main: com.zornoely.aimguard.ZornoAimGuardPlugin
+api-version: '1.21'
+author: ZornoEly
+description: PacketEvents tabanli gelişmiş AimAssist, KillAura, Reach, duvar arkası vuruş ve zararlı paket koruması.
+
+commands:
+  zornoaimguard:
+    description: ZornoAimGuard ana yönetim ve analiz komutu
+    usage: /<command> <status|stats|logs|alerts|decoy|reset|reload|ban|analiz|test|bypass>
+    permission: zornoaimguard.admin
+    aliases: [zag, aimguard]
+
+permissions:
+  zornoaimguard.admin:
+    description: ZornoAimGuard yönetim, test ve analiz komutlarına erişim
+    default: op
+  zornoaimguard.alerts:
+    description: Tespit uyarılarını oyun içinde görme (konsol ve dosya logu bundan bağımsız her zaman yazılır)
+    default: op
+  zornoaimguard.bypass:
+    description: Anti-cheat kontrol ve ceza muafiyeti (yalnızca punishments.yml içinde bypass.allow-permission-bypass true ise geçerli)
+    default: false
