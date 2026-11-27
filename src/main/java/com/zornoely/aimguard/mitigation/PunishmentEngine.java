@@ -23,8 +23,10 @@ public final class PunishmentEngine {
         if (elapsed < DECAY_INTERVAL_MS) {
             return;
         }
+        double perInterval = plugin.getPunishmentManager().getPunishmentsConfig()
+                .getDouble("punishments.vl-decay-per-interval", 0.30);
         double steps = elapsed / (double) DECAY_INTERVAL_MS;
-        profile.decayVl(0.22 * steps, 0.20 * steps, nowMs);
+        profile.decayVl(perInterval * steps, perInterval * steps, nowMs);
     }
 
     public void applyMovementMitigation(Player player, PlayerCheckProfile profile, PlayerMoveEvent event) {
