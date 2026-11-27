@@ -2,6 +2,7 @@ package com.zornoely.aimguard.punishment;
 
 import com.zornoely.aimguard.ZornoAimGuardPlugin;
 import com.zornoely.aimguard.profile.PlayerCheckProfile;
+import com.zornoely.aimguard.profile.PlayerCheckProfile.Category;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.ConfigurationSection;
@@ -32,6 +33,11 @@ public final class PunishmentRecordManager {
             boolean active
     ) {}
 
+    /** SOFT: yalnizca log/uyari. NORMAL: kanit sayilir. HARD: kesin (imkansiz) kanit. */
+    public enum Severity { SOFT, NORMAL, HARD }
+
+    private static final int CONFIG_VERSION = 3;
+
     private final ZornoAimGuardPlugin plugin;
     private final File punishmentsFile;
     private final File bansFile;
@@ -51,6 +57,20 @@ public final class PunishmentRecordManager {
     }
 
     public synchronized void reloadConfigs() {
+        if (punishmentsFile.exists()) {
+            int oldVersion = YamlConfiguration.loadConfiguration(punishmentsFile).getInt("config-version", 0);
+            if (oldVersion < CONFIG_VERSION) {
+                // Eski surumdeki agresif esikler (ornegin duvar vurusu VL=2.05) yeni mantikla uyumsuz: yedekle ve yenile.
+                File backup = new File(plugin.getDataFolder(), "punishments.yml.eski-v" + oldVersion);
+                if (backup.exists() && !backup.delete()) {
+                    plugin.getLogger().warning("Eski yedek silinemedi: " + backup.getName());
+                }
+                if (punishmentsFile.renameTo(backup)) {
+                    plugin.getLogger().info("Eski punishments.yml yedeklendi (" + backup.getName()
+                            + "), yeni v" + CONFIG_VERSION + " ayarlari olusturuluyor.");
+                }
+            }
+        }
         if (!punishmentsFile.exists()) {
             plugin.saveResource("punishments.yml", false);
         }
@@ -268,7 +288,13 @@ public final class PunishmentRecordManager {
         playerHist.set("events", entries);
     }
 
-    public void evaluateAndPunish(Player player, PlayerCheckProfile profile, long nowMs, String detail) {
+    /**
+     * Bir tespiti isler: HER ZAMAN loglar (konsol + dosya + yetkili uyarisi), sonra ceza gerekip gerekmedigine karar verir.
+     * Ceza kurallari: test modu / giris-isinlanma toleransi / lag durumunda ceza yok; kick/ban icin ayrica
+     * "yeterli kanit" (en az 2 farkli savas kategorisi veya sert kanit) aranir. VL'yi cagiran taraf onceden ekler.
+     */
+    public void flag(Player player, PlayerCheckProfile profile, long nowMs, Category category,
+                     String check, String detail, Severity severity) {
         if (player == null || !player.isOnline()) {
             return;
         }
@@ -276,56 +302,69 @@ public final class PunishmentRecordManager {
             return;
         }
 
-        double totalVl = profile.getMathVl() + profile.getHeuristicVl();
         boolean testOnly = plugin.isTestLogOnly(player.getUniqueId());
         boolean focused = plugin.isPlayerFocused(player.getUniqueId(), nowMs);
+        if (severity != Severity.SOFT) {
+            profile.recordFlag(category, nowMs, severity == Severity.HARD);
+        }
 
-        // Bypass kapaliysa ve lag yoksa her tespitte konsola log kesin duser
-        if (!profile.isLagging()) {
-            String logLine = "[ZornoAimGuard] " + player.getName()
-                    + " -> " + detail
-                    + " | mathVL=" + String.format("%.2f", profile.getMathVl())
-                    + " aimVL=" + String.format("%.2f", profile.getHeuristicVl())
-                    + " totalVL=" + String.format("%.2f", totalVl)
-                    + " ping=" + player.getPing() + "ms"
-                    + (testOnly ? " [TEST-LOG-ONLY]" : "");
-            plugin.getLogger().info(logLine);
-            if (focused) {
-                plugin.notifyFocusTelemetry(player, profile, detail);
+        double totalVl = profile.getMathVl() + profile.getHeuristicVl();
+        boolean hard = severity == Severity.HARD;
+        String action = "LOG";
+
+        if (severity == Severity.SOFT) {
+            action = "BUFFER";
+        } else if (testOnly) {
+            action = "TEST";
+        } else if (profile.inGrace(nowMs)) {
+            action = "GRACE";
+        } else if (!hard && profile.isLagging()) {
+            action = "LAG";
+        } else {
+            long windowMs = punishmentsConfig.getLong("punishments.evidence-window-seconds", 90L) * 1000L;
+            boolean requireEvidence = punishmentsConfig.getBoolean("punishments.require-evidence", true);
+            boolean hardRecent = (nowMs - profile.getLastHardEvidenceMs()) <= Math.max(windowMs, 120_000L)
+                    && profile.getLastHardEvidenceMs() > 0L;
+            int categories = profile.distinctCombatCategories(nowMs, windowMs);
+            boolean evidenceOk = !requireEvidence || hardRecent || categories >= 2;
+
+            long lastPunishmentMs = lastPunishmentByPlayer.getOrDefault(player.getUniqueId(), 0L);
+            long cooldown = punishmentsConfig.getLong("punishments.punish-cooldown-ms", 2500L);
+
+            double kickAtVl = punishmentsConfig.getDouble("punishments.kick-at-vl", 12.0);
+            double banAtVl = punishmentsConfig.getDouble("punishments.ban-at-vl", 20.0);
+            boolean escalate = punishmentsConfig.getBoolean("punishments.escalate-kick-to-ban", true);
+            int maxKicksBeforeBan = punishmentsConfig.getInt("punishments.max-kicks-before-ban", 2);
+            long banDays = punishmentsConfig.getLong("punishments.ban-duration-days", 7L);
+
+            if (totalVl >= kickAtVl && !evidenceOk) {
+                action = "NEED-EVIDENCE";
+            } else if (totalVl >= kickAtVl && (nowMs - lastPunishmentMs) >= cooldown) {
+                lastPunishmentByPlayer.put(player.getUniqueId(), nowMs);
+                String reasonDetail = check + ": " + detail;
+                if (totalVl >= banAtVl) {
+                    action = "BAN";
+                    banPlayer(player.getName(), player.getUniqueId(), "Hile tespiti (" + reasonDetail + ")",
+                            "ZornoAimGuard", banDays);
+                } else {
+                    int kicks = recordKick(player, reasonDetail);
+                    if (escalate && kicks >= maxKicksBeforeBan) {
+                        action = "BAN";
+                        banPlayer(player.getName(), player.getUniqueId(),
+                                "Tekrarlanan hile tespiti (" + kicks + " kick)", "ZornoAimGuard", banDays);
+                    } else {
+                        action = "KICK";
+                        Bukkit.getScheduler().runTask(plugin, () -> player.kick(
+                                Component.text("§c§lZornoAimGuard §8» §7Supheli vurus/hareket tespiti (" + check + ").")
+                        ));
+                    }
+                }
             }
         }
 
-        if (testOnly || profile.isLagging()) {
-            return;
-        }
-
-        long lastPunishmentMs = lastPunishmentByPlayer.getOrDefault(player.getUniqueId(), 0L);
-        if ((nowMs - lastPunishmentMs) < 2500L) {
-            return;
-        }
-
-        double kickAtVl = punishmentsConfig.getDouble("punishments.kick-at-vl", 10.0);
-        double banAtVl = punishmentsConfig.getDouble("punishments.ban-at-vl", 16.0);
-        boolean escalate = punishmentsConfig.getBoolean("punishments.escalate-kick-to-ban", true);
-        int maxKicksBeforeBan = punishmentsConfig.getInt("punishments.max-kicks-before-ban", 2);
-        long banDays = punishmentsConfig.getLong("punishments.ban-duration-days", 7L);
-
-        if (totalVl >= banAtVl) {
-            lastPunishmentByPlayer.put(player.getUniqueId(), nowMs);
-            banPlayer(player.getName(), player.getUniqueId(), "Hile tespiti (" + detail + ")", "ZornoAimGuard", banDays);
-            return;
-        }
-
-        if (totalVl >= kickAtVl) {
-            lastPunishmentByPlayer.put(player.getUniqueId(), nowMs);
-            int kicks = recordKick(player, detail);
-            if (escalate && kicks >= maxKicksBeforeBan) {
-                banPlayer(player.getName(), player.getUniqueId(), "Tekrarlanan hile tespiti (" + kicks + " kick)", "ZornoAimGuard", banDays);
-                return;
-            }
-            Bukkit.getScheduler().runTask(plugin, () -> player.kick(
-                    Component.text("§c§lZornoAimGuard §8» §7Supheli hareket/vurus tespiti (" + detail + ").")
-            ));
+        plugin.getViolationLogger().record(player, profile, category, check, detail, action);
+        if (focused) {
+            plugin.notifyFocusTelemetry(player, profile, check + " " + detail);
         }
     }
 }
