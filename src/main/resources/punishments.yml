@@ -1,0 +1,108 @@
+# ZornoAimGuard v3 ayarlari.
+# Eski (v2) dosya otomatik olarak "punishments.yml.eski-v0" adiyla yedeklenir ve bu dosya olusturulur.
+config-version: 3
+
+punishments:
+  # Kick/ban icin gereken toplam VL
+  kick-at-vl: 12.0
+  ban-at-vl: 20.0
+  escalate-kick-to-ban: true
+  max-kicks-before-ban: 2
+  ban-duration-days: 7
+  # YANLIS BAN ONLEMI: kick/ban icin en az 2 FARKLI savas kategorisi (reach, duvar, aim, killaura, paket, tuzak)
+  # veya 1 "kesin kanit" (ornegin tuzaga bakmadan vurma, gecersiz paket) gerekir.
+  require-evidence: true
+  evidence-window-seconds: 90
+  punish-cooldown-ms: 2500
+  # 2.5 saniyede dusen VL miktari
+  vl-decay-per-interval: 0.30
+
+# Tespit kayitlari: konsol + plugins/ZornoAimGuard/logs/violations-GUN.log + yetkililere oyun ici uyari.
+# Lag/tolerans yuzunden ceza verilmeyen tespitler de kaydedilir (satir sonundaki etiket nedenini gosterir).
+logging:
+  console: true
+  console-info: false
+  file: true
+  staff-alerts: true
+  alert-cooldown-ms: 800
+  # false: tampon seviyesindeki (henuz VL eklemeyen) tespitler oyun ici uyari olarak gosterilmez; dosya/konsol yine yazilir
+  alert-soft: true
+  keep-in-memory: 800
+
+bypass:
+  # true yapilirsa zornoaimguard.bypass iznine sahip olanlar kontrol disi kalir (OP'ler otomatik muaf DEGILDIR)
+  allow-permission-bypass: false
+  # Bedrock (Floodgate/Geyser) oyunculari: dokunmatik/kumanda nisan yardimi dogal oldugu icin nisan sezgisinden muaf
+  name-prefixes: ["."]
+
+# Giris/isinlanma/yeniden dogma sonrasi kontrollerin bekledigi sure (ms)
+grace:
+  join-ms: 4000
+  teleport-ms: 1500
+  respawn-ms: 2000
+  world-change-ms: 2000
+
+environment:
+  elytra-safe-mode: true
+  freeze-on-low-signals: false
+
+movement:
+  enabled: true
+  horiz-offset-threshold: 0.45
+  horiz-severe-threshold: 0.75
+  min-sustained-window-ms: 1100
+  min-sustained-hits: 4
+  horiz-vl-for-punish: 9.0
+
+combat:
+  reach:
+    # Vanilla saldiri menzili 3.0; ustune tolerans + hiz/ping payi eklenir
+    max-blocks: 3.0
+    tolerance: 0.25
+    buffer-needed: 2.5
+  wall:
+    # Duvar arkasi: hedef kutusunun HICBIR noktasina gorus hatti yoksa (cok noktali kontrol) vurus iptal edilir.
+    enabled: true
+    box-inflate: 0.12
+    # Ceza (VL) ancak tampon bu degere ulasinca verilir; tek seferlik sinir durumu ceza getirmez
+    buffer-needed: 2.0
+    vl: 1.2
+  aim:
+    enabled: true
+    # Vurus aninda kursorun hedef kutusuna izin verilen azami sapmasi (mesafe/ping payi ustune eklenir)
+    max-hit-error-deg: 10.0
+    mismatch-buffer-needed: 3.0
+    # Supheli isaretlenen oyuncunun bu aciyi asan vuruslari iptal edilir (6 sn)
+    mitigation-angle: 45.0
+    # Merkeze kilitlenme (aim assist) istatistigi icin gereken en az hareketli-hedef vurusu (12 sn pencere)
+    lock-min-hits: 8
+
+killaura:
+  # Hizli donus esigi (derece/tick) - yalnizca analiz bilgisi
+  snap-turn-min-deg: 40.0
+  # Vur-ve-geri-don (sessiz rotasyon) esigi
+  snap-return-min-deg: 35.0
+  # Ussel yumusatma (aim assist) imzasi: ardisik duzgun azalan donus adimi sayisi
+  smooth-run-min: 4
+
+packets:
+  enabled: true
+  # Gecersiz paket (NaN konum, kendine saldiri vb.) gonderen baglanti kapatilir
+  kick-on-invalid: true
+  max-flying-per-second: 120
+  max-attacks-per-second: 30
+  attack-flood-flag-at: 45
+  noswing-buffer-needed: 4.0
+
+decoy:
+  # Paket tabanli tuzak oyuncu NPC (PacketEvents gerekir). Yalnizca zaten supheli olan oyuncuya gosterilir.
+  enabled: true
+  auto-spawn-min-vl: 3.0
+  auto-spawn-min-score: 0.30
+  respawn-cooldown-ms: 6000
+  spawn-distance-blocks: 2.55
+  visible-duration-ms: 1100
+  max-waves: 3
+  # Kursor tuzagin bu kadar yakinindaysa (merak) kesin kanit sayilmaz; uzaktaysa kesin kanittir
+  aimed-max-error-deg: 12.0
+  vl-per-aura-hit: 5.0
